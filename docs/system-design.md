@@ -48,7 +48,7 @@ flowchart LR
 
 ### Staff configuration
 
-Managers and owners update dealership configuration through the API. The API checks role and dealership scope before saving changes. Availability uses the saved configuration; changes must not rewrite appointment snapshots.
+Managers and owners update dealership configuration through the API. The API checks role and dealership scope before saving changes. Customer profiles are associated with dealerships through an explicit relationship; staff customer and vehicle operations are restricted to profiles associated with their dealership. Availability uses the saved configuration; changes must not rewrite appointment snapshots.
 
 ## Technology choices
 
@@ -68,8 +68,9 @@ Appointments link customers, vehicles, dealerships, services, technicians, and b
 
 ## Observability strategy
 
-- **MVP:** Provide liveness/readiness checks and structured logs for request outcomes and booking failures. Exclude credentials, verification codes, request bodies, customer contact details, VINs, and other personal data.
-- **Later:** Add metrics, distributed traces, dashboards, and alerts when production hosting is selected. Telemetry must not block booking requests or expose customer/vehicle data.
+- **MVP application baseline:** Provide liveness/readiness checks and allowlisted HTTP request logs containing method, status code, and duration. Add booking outcome events when booking endpoints are implemented. Exclude credentials, request bodies, customer contact details, VINs, and other personal data.
+- **Production application instrumentation:** Add metrics and distributed traces after booking and availability flows exist and a telemetry backend is selected. Telemetry export must not block requests or expose customer/vehicle data.
+- **Deployment/operations:** Configure telemetry storage, retention/access, dashboards, alert thresholds, and notification routing with the production hosting environment and operational owner. These are not created automatically by backend logging or metric instrumentation.
 
 ## Security and data integrity
 

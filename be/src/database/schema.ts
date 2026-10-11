@@ -134,6 +134,29 @@ export const dealershipMemberships = pgTable(
   ],
 );
 
+export const dealershipCustomers = pgTable(
+  "dealership_customers",
+  {
+    dealershipId: uuid("dealership_id")
+      .notNull()
+      .references(() => dealerships.id, { onDelete: "restrict" }),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customers.id, { onDelete: "restrict" }),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, {
+      onDelete: "restrict",
+    }),
+    ...timestamps,
+  },
+  (table) => [
+    primaryKey({
+      name: "dealership_customers_pk",
+      columns: [table.dealershipId, table.customerId],
+    }),
+    index("dealership_customers_customer_idx").on(table.customerId),
+  ],
+);
+
 export const vehicles = pgTable(
   "vehicles",
   {
@@ -152,6 +175,29 @@ export const vehicles = pgTable(
     unique("vehicles_vin_unique").on(table.vin),
     index("vehicles_owner_idx").on(table.ownerCustomerId),
     check("vehicles_year_check", sql`${table.year} BETWEEN 1886 AND 9999`),
+  ],
+);
+
+export const dealershipVehicles = pgTable(
+  "dealership_vehicles",
+  {
+    dealershipId: uuid("dealership_id")
+      .notNull()
+      .references(() => dealerships.id, { onDelete: "restrict" }),
+    vehicleId: uuid("vehicle_id")
+      .notNull()
+      .references(() => vehicles.id, { onDelete: "restrict" }),
+    assignedByUserId: uuid("assigned_by_user_id").references(() => users.id, {
+      onDelete: "restrict",
+    }),
+    ...timestamps,
+  },
+  (table) => [
+    primaryKey({
+      name: "dealership_vehicles_pk",
+      columns: [table.dealershipId, table.vehicleId],
+    }),
+    index("dealership_vehicles_vehicle_idx").on(table.vehicleId),
   ],
 );
 
@@ -184,7 +230,10 @@ export const serviceTypes = pgTable(
     isActive: boolean("is_active").notNull().default(true),
     ...timestamps,
   },
-  (table) => [index("service_types_active_idx").on(table.isActive)],
+  (table) => [
+    unique("service_types_name_unique").on(table.name),
+    index("service_types_active_idx").on(table.isActive),
+  ],
 );
 
 export const dealershipServices = pgTable(

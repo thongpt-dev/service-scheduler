@@ -15,6 +15,20 @@
       "when": 1791698906452,
       "tag": "0001_public_terrax",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791716657392,
+      "tag": "0002_open_post",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791733471646,
+      "tag": "0003_smiling_hellfire_club",
+      "breakpoints": true
     }
   ]
 }

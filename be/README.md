@@ -23,7 +23,9 @@ Before using auth endpoints, set `JWT_SECRET` in `.env` to at least 32 random by
 
 The API listens on `http://localhost:3000`. Swagger UI is at `/api/docs`. URI versioning uses `/api` as the global prefix and defaults unversioned controllers to v1; this MVP currently implements v1 only. The public health and readiness endpoints are `/api/v1/health` and `/api/v1/ready`; readiness returns `503` when PostgreSQL is unavailable.
 
-The auth endpoints are `/api/v1/auth/customers/register`, `/api/v1/auth/customers/login`, `/api/v1/auth/staff/login`, `/api/v1/auth/staff/provision`, and `/api/v1/auth/tokens/revoke-all`. Customer and provisioned staff accounts are unverified but can sign in; email verification is not implemented in the MVP. Only dealership owners and managers may provision within their own dealership; managers can provision staff accounts only. Real dealership creation and initial owner assignment will be provided through the dealership/domain APIs.
+The auth endpoints are `/api/v1/auth/customers/register`, `/api/v1/auth/customers/login`, `/api/v1/auth/staff/login`, `/api/v1/auth/staff/provision`, and `/api/v1/auth/tokens/revoke-all`. Customer and provisioned staff accounts are unverified but can sign in; email verification is not implemented in the MVP. Only dealership owners and managers may provision within their own dealership; managers can provision staff accounts only. An authenticated customer or staff account can create a dealership and becomes its initial owner.
+
+The domain APIs include customer profiles and dealership-customer association, dealership-scoped customer/vehicle management, shared service types, and dealership-specific service offerings. See [api.md](../docs/api.md) for implemented routes and access scopes.
 
 The PostgreSQL service and demo accounts are for local development only. Never use the demo credentials outside a local development database. Migrations create the schema and booking-overlap constraints. The repeatable `npm run db:seed` command adds a fictional dealership, service, technician, bay, a customer profile linked to a login account, vehicle, and linked owner/staff demo accounts. Rerunning it does not reset existing account passwords. Seeding requires `NODE_ENV=development` or `NODE_ENV=test`; it refuses to run when the mode is unset or any other value. If you already have a local `.env`, add `NODE_ENV=development` before seeding.
 
@@ -35,7 +37,7 @@ Local demo accounts:
 | Owner | `sample.owner@example.test` | `LocalOwnerPass123!` |
 | Staff | `sample.staff@example.test` | `LocalStaffPass123!` |
 
-Sign the customer in through `POST /api/v1/auth/customers/login`; sign the owner and staff in through `POST /api/v1/auth/staff/login`. These fixed credentials exist only to make the fictional local seed usable; do not deploy or seed them into a shared or production environment. Creating real dealerships and their staff accounts is planned with the dealership/domain APIs.
+Sign the customer in through `POST /api/v1/auth/customers/login`; sign the owner and staff in through `POST /api/v1/auth/staff/login`. These fixed credentials exist only to make the fictional local seed usable; do not deploy or seed them into a shared or production environment.
 
 ## Checks
 

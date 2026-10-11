@@ -13,6 +13,7 @@ const seedIds = {
   customer: "55555555-5555-4555-8555-555555555555",
   vehicle: "66666666-6666-4666-8666-666666666666",
   customerUser: "99999999-9999-4999-8999-999999999999",
+  unassignedVehicle: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   owner: "77777777-7777-4777-8777-777777777777",
   staff: "88888888-8888-4888-8888-888888888888",
 };
@@ -177,6 +178,22 @@ async function seedDatabase(): Promise<void> {
       });
 
     await db
+      .insert(schema.dealershipCustomers)
+      .values({
+        dealershipId: seedIds.dealership,
+        customerId: seedIds.customer,
+      })
+      .onConflictDoNothing();
+
+    await db
+      .insert(schema.dealershipCustomers)
+      .values({
+        dealershipId: seedIds.dealership,
+        customerId: seedIds.customer,
+      })
+      .onConflictDoNothing();
+
+    await db
       .insert(schema.vehicles)
       .values({
         id: seedIds.vehicle,
@@ -185,6 +202,26 @@ async function seedDatabase(): Promise<void> {
         make: "Example Motors",
         model: "Development Vehicle",
         year: 2022,
+      })
+      .onConflictDoNothing();
+
+    await db
+      .insert(schema.dealershipVehicles)
+      .values({
+        dealershipId: seedIds.dealership,
+        vehicleId: seedIds.vehicle,
+      })
+      .onConflictDoNothing();
+
+    await db
+      .insert(schema.vehicles)
+      .values({
+        id: seedIds.unassignedVehicle,
+        ownerCustomerId: seedIds.customer,
+        vin: "SAMPLE12345678902",
+        make: "Example Motors",
+        model: "Unassigned Development Vehicle",
+        year: 2023,
       })
       .onConflictDoNothing();
   } finally {

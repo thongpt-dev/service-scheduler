@@ -36,7 +36,7 @@ export class AuthController {
   @ApiOperation({
     summary: "Register a customer account",
     description:
-      "Creates a customer profile and password account. Email remains unverified; verification is not required for MVP sign-in or booking.",
+      "Creates a password account and either creates a customer profile or links an active, unlinked profile with the same normalized email. Existing profile details are preserved. Email remains unverified; because email verification is not implemented, matching an unlinked profile is claimed based on the submitted email.",
   })
   @ApiBody({
     type: RegisterCustomerDto,

@@ -233,6 +233,50 @@ async function run(): Promise<void> {
       customerAuth.principalRoles.includes("customer"),
       "Customer principal role is derived from the active profile",
     );
+
+    const existingProfileEmail = `existing-profile-${randomUUID()}@example.test`;
+    const [existingProfile] = await db
+      .insert(schema.customers)
+      .values({
+        email: existingProfileEmail,
+        firstName: "Existing",
+        lastName: "Dealership Customer",
+        phone: "+12025550123",
+      })
+      .returning();
+    assert(existingProfile !== undefined, "Unlinked profile should be created");
+
+    const claimedRegistration = await authService.registerCustomer({
+      email: existingProfileEmail.toUpperCase(),
+      password: "Claimed-Profile-Password-123!",
+      firstName: "Registration",
+      lastName: "Details",
+      phone: "+12025550987",
+    });
+    assert(
+      claimedRegistration.customerId === existingProfile.id,
+      "Registration with an existing unlinked profile must reuse its customer ID",
+    );
+    const [claimedProfile] = await db
+      .select()
+      .from(schema.customers)
+      .where(eq(schema.customers.id, existingProfile.id));
+    assert(
+      claimedProfile?.userId !== null &&
+        claimedProfile?.userId !== undefined &&
+        claimedProfile.firstName === "Existing" &&
+        claimedProfile.lastName === "Dealership Customer" &&
+        claimedProfile.phone === "+12025550123",
+      "Registration must link the existing profile without overwriting its details",
+    );
+    const claimedAuth = await authService.authenticateBearerToken(
+      claimedRegistration.accessToken,
+    );
+    assert(
+      claimedAuth.customer?.id === existingProfile.id,
+      "Claimed profile must be the customer principal for the new account",
+    );
+
     await expectError(
       () =>
         authService.customerLogin({

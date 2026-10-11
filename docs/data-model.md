@@ -9,8 +9,12 @@ erDiagram
     USERS ||--o| CUSTOMERS : "linked account"
     USERS ||--o{ DEALERSHIP_MEMBERSHIPS : has
     DEALERSHIPS ||--o{ DEALERSHIP_MEMBERSHIPS : grants
+    DEALERSHIPS ||--o{ DEALERSHIP_CUSTOMERS : serves
+    CUSTOMERS ||--o{ DEALERSHIP_CUSTOMERS : associated_with
 
     CUSTOMERS ||--o{ VEHICLES : owns
+    DEALERSHIPS ||--o{ DEALERSHIP_VEHICLES : assigned
+    VEHICLES ||--o{ DEALERSHIP_VEHICLES : available_at
     CUSTOMERS ||--o{ CUSTOMER_VEHICLE_ACCESS : receives
     VEHICLES ||--o{ CUSTOMER_VEHICLE_ACCESS : shared_with
 
@@ -80,6 +84,13 @@ erDiagram
         enum role "owner, manager, staff"
         boolean is_active
     }
+    DEALERSHIP_CUSTOMERS {
+        uuid dealership_id PK,FK
+        uuid customer_id PK,FK
+        uuid created_by_user_id FK "nullable"
+        timestamptz created_at
+        timestamptz updated_at
+    }
     VEHICLES {
         uuid id PK
         uuid owner_customer_id FK
@@ -88,6 +99,13 @@ erDiagram
         varchar model
         integer year
         boolean is_active
+    }
+    DEALERSHIP_VEHICLES {
+        uuid dealership_id PK,FK
+        uuid vehicle_id PK,FK
+        uuid assigned_by_user_id FK "nullable"
+        timestamptz created_at
+        timestamptz updated_at
     }
     CUSTOMER_VEHICLE_ACCESS {
         uuid customer_id PK,FK
@@ -195,12 +213,14 @@ All mutable domain tables use UUID primary keys and timezone-aware `created_at` 
 | Entity | Purpose and important rules |
 | --- | --- |
 | `users` | Login identity. Email is unique and lowercase; `password_hash` is required and stores a salted, parameterized scrypt hash. `email_verified_at` is nullable and remains null for new MVP accounts; verification does not gate sign-in or booking. `token_version` is nonnegative and supports invalidating previously issued tokens. |
-| `customers` | Customer profile and contact information. `user_id` is nullable and unique so staff can create a customer before that customer has an account; a linked customer has at most one user. Customer email is unique and lowercase. |
+| `customers` | Customer profile and contact information. `user_id` is nullable and unique so staff can create a customer before that customer has an account; customer registration links an active unlinked profile when its normalized email matches. A linked customer has at most one user. Customer email is unique and lowercase. |
 | `dealerships` | Dealership identity, address, active state, and IANA timezone. Country code must be uppercase two-letter format. Timezone validity is an API validation responsibility. |
 | `dealership_memberships` | Joins users to dealerships with one membership per user/dealership and role `owner`, `manager`, or `staff`. Memberships can be deactivated without deleting history. |
+| `dealership_customers` | Associates customer profiles with dealerships authorized to manage them. The composite dealership/customer key permits one customer to work with multiple dealerships. `created_by_user_id` records the user who created the association. Staff customer and vehicle operations are scoped through this relationship. |
 | `vehicles` | Vehicle owned by one customer. VIN is globally unique and 17 characters; model year is constrained to 1886 or later. Deactivate rather than delete vehicles referenced by appointments. |
+| `dealership_vehicles` | Explicitly assigns a vehicle to a dealership. This is the authorization boundary for dealership staff vehicle listing, updates, and dealership-assisted sharing; associating a customer with a dealership does not expose any of that customer's vehicles. The composite dealership/vehicle key makes assignment idempotent, and `assigned_by_user_id` records the actor. |
 | `customer_vehicle_access` | Explicit additional access to a vehicle. The vehicle owner already has access through `vehicles.owner_customer_id`; rows represent sharing with additional customers. |
-| `service_types` | Shared service catalog entry with name, optional description, and active state. |
+| `service_types` | Shared service catalog entry with a globally unique name, optional description, and active state. Manager/owner catalog writes affect this shared reference catalog; dealership offerings remain scoped separately. |
 | `dealership_services` | A dealership's offering for a service type. The dealership/service pair is unique and duration must be positive. The active offering's duration is authoritative; clients do not provide appointment end time. |
 | `dealership_hours` | At most one weekly schedule record per dealership/day. Day numbering follows PostgreSQL convention: Sunday `0` through Saturday `6`. Closed days require null open/close times; open days require both times and `open_time < close_time`. The schema supports one continuous window per day. |
 | `dealership_closures` | Dated dealership closure interval with optional reason. Timestamps are timezone-aware instants and `starts_at < ends_at`. |
@@ -222,6 +242,8 @@ Appointment foreign keys use `ON DELETE RESTRICT` to preserve history. Composite
 - The assigned bay belongs to that dealership and has a capability row for the service.
 
 These relational checks do not determine whether entities are active or whether qualification dates, shifts, leave, dealership hours, or customer authorization permit a particular booking. Those checks remain server-side responsibilities and must be repeated during confirmation.
+
+Dealership vehicle visibility is separate from customer/dealership association and customer/vehicle sharing. A dealership can see a vehicle only when a `dealership_vehicles` row assigns it there; for a particular dealership customer, the vehicle must also be owned by or explicitly shared with that customer. Existing customer/dealership links are not automatically backfilled into `dealership_vehicles`, because that could expose every vehicle belonging to those customers. Vehicles must be assigned through customer opt-in or staff-assisted intake.
 
 Appointment instants, closures, leave, and qualification validity are `timestamptz` values stored as instants. Weekly opening hours and technician shifts are `time` values interpreted in the dealership's IANA timezone. Intervals use half-open `[start, end)` semantics: an appointment ending at 10:00 does not overlap one starting at 10:00.
 

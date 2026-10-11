@@ -130,7 +130,7 @@ async function run(): Promise<void> {
     const tableResult = await pool.query<{ count: string }>(
       "SELECT count(*) FROM pg_tables WHERE schemaname = 'public'",
     );
-    assert(tableResult.rows[0].count === "18", "Expected 18 MVP tables");
+    assert(tableResult.rows[0].count === "20", "Expected 20 MVP tables");
 
     await seed(pool, testDatabaseUrl);
     await seed(pool, testDatabaseUrl);

@@ -6,7 +6,7 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import jwt from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
 import { InjectDb, type Database } from "../database/database.types";
@@ -89,13 +89,25 @@ export class AuthService {
           .from(users)
           .where(eq(users.email, email))
           .limit(1);
+        if (existingUser) {
+          throw new ConflictException(
+            "Account could not be created with those details",
+          );
+        }
+
         const [existingCustomer] = await tx
-          .select({ id: customers.id })
+          .select({
+            id: customers.id,
+            userId: customers.userId,
+            isActive: customers.isActive,
+          })
           .from(customers)
           .where(eq(customers.email, email))
           .limit(1);
-
-        if (existingUser || existingCustomer) {
+        if (
+          existingCustomer &&
+          (!existingCustomer.isActive || existingCustomer.userId !== null)
+        ) {
           throw new ConflictException(
             "Account could not be created with those details",
           );
@@ -107,6 +119,27 @@ export class AuthService {
           .returning({ id: users.id });
         if (!user) {
           throw new Error("Customer identity insert returned no row");
+        }
+
+        if (existingCustomer) {
+          const [linkedCustomer] = await tx
+            .update(customers)
+            .set({ userId: user.id, updatedAt: new Date() })
+            .where(
+              and(
+                eq(customers.id, existingCustomer.id),
+                eq(customers.isActive, true),
+                isNull(customers.userId),
+              ),
+            )
+            .returning({ id: customers.id });
+          if (!linkedCustomer) {
+            throw new ConflictException(
+              "Account could not be created with those details",
+            );
+          }
+
+          return { userId: user.id, customerId: linkedCustomer.id };
         }
 
         const [customer] = await tx
