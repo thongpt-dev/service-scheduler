@@ -12,9 +12,24 @@ const seededIds = {
   bay: "44444444-4444-4444-8444-444444444444",
   customer: "55555555-5555-4555-8555-555555555555",
   vehicle: "66666666-6666-4666-8666-666666666666",
+  unassignedVehicle: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   customerUser: "99999999-9999-4999-8999-999999999999",
   owner: "77777777-7777-4777-8777-777777777777",
   staff: "88888888-8888-4888-8888-888888888888",
+  manager: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab",
+  mountainDealership: "11111111-1111-4111-8111-111111111112",
+  cityDealership: "11111111-1111-4111-8111-111111111113",
+  secondCustomer: "55555555-5555-4555-8555-555555555556",
+  thirdCustomer: "55555555-5555-4555-8555-555555555557",
+  mountainVehicle: "66666666-6666-4666-8666-666666666667",
+  mountainSecondVehicle: "66666666-6666-4666-8666-666666666668",
+  cityVehicle: "66666666-6666-4666-8666-666666666669",
+  mountainTechnician: "33333333-3333-4333-8333-333333333334",
+  diagnosticsTechnician: "33333333-3333-4333-8333-333333333335",
+  cityTechnician: "33333333-3333-4333-8333-333333333336",
+  mountainBay: "44444444-4444-4444-8444-444444444445",
+  mountainDiagnosticsBay: "44444444-4444-4444-8444-444444444446",
+  cityBay: "44444444-4444-4444-8444-444444444447",
 };
 
 function databaseErrorCode(error: unknown): string | undefined {
@@ -68,6 +83,20 @@ async function seed(pool: Pool, databaseUrl: string): Promise<void> {
     customerUserLink: string;
     ownerMembership: string;
     staffMembership: string;
+    demoDealerships: string;
+    demoHours: string;
+    demoCustomers: string;
+    demoVehicles: string;
+    demoVehicleAssignments: string;
+    demoServices: string;
+    demoTechnicians: string;
+    demoQualifications: string;
+    demoShifts: string;
+    demoLeaves: string;
+    demoBays: string;
+    demoCapabilities: string;
+    demoClosures: string;
+    managerMembership: string;
   }>(
     `SELECT
       (SELECT count(*) FROM dealerships WHERE id = $1) AS dealership,
@@ -77,7 +106,21 @@ async function seed(pool: Pool, databaseUrl: string): Promise<void> {
       (SELECT count(*) FROM vehicles WHERE id = $4) AS vehicle,
       (SELECT count(*) FROM customers WHERE id = $8 AND user_id = $5) AS "customerUserLink",
       (SELECT count(*) FROM dealership_memberships WHERE dealership_id = $1 AND user_id = $6 AND role = 'owner' AND is_active) AS "ownerMembership",
-      (SELECT count(*) FROM dealership_memberships WHERE dealership_id = $1 AND user_id = $7 AND role = 'staff' AND is_active) AS "staffMembership"`,
+      (SELECT count(*) FROM dealership_memberships WHERE dealership_id = $1 AND user_id = $7 AND role = 'staff' AND is_active) AS "staffMembership",
+      (SELECT count(*) FROM dealerships WHERE id = ANY($9::uuid[])) AS "demoDealerships",
+      (SELECT count(*) FROM dealership_hours WHERE dealership_id = ANY($9::uuid[])) AS "demoHours",
+      (SELECT count(*) FROM customers WHERE id = ANY($10::uuid[])) AS "demoCustomers",
+      (SELECT count(*) FROM vehicles WHERE id = ANY($11::uuid[])) AS "demoVehicles",
+      (SELECT count(*) FROM dealership_vehicles WHERE dealership_id = ANY($9::uuid[]) AND vehicle_id = ANY($11::uuid[])) AS "demoVehicleAssignments",
+      (SELECT count(*) FROM service_types WHERE id = ANY($12::uuid[])) AS "demoServices",
+      (SELECT count(*) FROM technicians WHERE id = ANY($13::uuid[])) AS "demoTechnicians",
+      (SELECT count(*) FROM technician_qualifications WHERE technician_id = ANY($13::uuid[])) AS "demoQualifications",
+      (SELECT count(*) FROM technician_shifts WHERE technician_id = ANY($13::uuid[])) AS "demoShifts",
+      (SELECT count(*) FROM technician_leaves WHERE technician_id = ANY($13::uuid[])) AS "demoLeaves",
+      (SELECT count(*) FROM service_bays WHERE id = ANY($14::uuid[])) AS "demoBays",
+      (SELECT count(*) FROM bay_service_capabilities WHERE bay_id = ANY($14::uuid[])) AS "demoCapabilities",
+      (SELECT count(*) FROM dealership_closures WHERE id = ANY($15::uuid[])) AS "demoClosures",
+      (SELECT count(*) FROM dealership_memberships WHERE dealership_id = $16 AND user_id = $17 AND role = 'manager' AND is_active) AS "managerMembership"`,
     [
       seededIds.dealership,
       seededIds.technician,
@@ -87,6 +130,43 @@ async function seed(pool: Pool, databaseUrl: string): Promise<void> {
       seededIds.owner,
       seededIds.staff,
       seededIds.customer,
+      [
+        seededIds.dealership,
+        seededIds.mountainDealership,
+        seededIds.cityDealership,
+      ],
+      [seededIds.customer, seededIds.secondCustomer, seededIds.thirdCustomer],
+      [
+        seededIds.vehicle,
+        seededIds.unassignedVehicle,
+        seededIds.mountainVehicle,
+        seededIds.mountainSecondVehicle,
+        seededIds.cityVehicle,
+      ],
+      [
+        seededIds.serviceType,
+        "22222222-2222-4222-8222-222222222223",
+        "22222222-2222-4222-8222-222222222224",
+        "22222222-2222-4222-8222-222222222225",
+      ],
+      [
+        seededIds.technician,
+        seededIds.mountainTechnician,
+        seededIds.diagnosticsTechnician,
+        seededIds.cityTechnician,
+      ],
+      [
+        seededIds.bay,
+        seededIds.mountainBay,
+        seededIds.mountainDiagnosticsBay,
+        seededIds.cityBay,
+      ],
+      [
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1",
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+      ],
+      seededIds.mountainDealership,
+      seededIds.manager,
     ],
   );
   const counts = result.rows[0];
@@ -98,7 +178,21 @@ async function seed(pool: Pool, databaseUrl: string): Promise<void> {
       counts.vehicle === "1" &&
       counts.customerUserLink === "1" &&
       counts.ownerMembership === "1" &&
-      counts.staffMembership === "1",
+      counts.staffMembership === "1" &&
+      counts.demoDealerships === "3" &&
+      counts.demoHours === "21" &&
+      counts.demoCustomers === "3" &&
+      counts.demoVehicles === "5" &&
+      counts.demoVehicleAssignments === "4" &&
+      counts.demoServices === "4" &&
+      counts.demoTechnicians === "4" &&
+      counts.demoQualifications === "7" &&
+      counts.demoShifts === "20" &&
+      counts.demoLeaves === "2" &&
+      counts.demoBays === "4" &&
+      counts.demoCapabilities === "7" &&
+      counts.demoClosures === "2" &&
+      counts.managerMembership === "1",
     "Seed should create repeatable fixtures with linked customer, owner, and staff accounts",
   );
 }

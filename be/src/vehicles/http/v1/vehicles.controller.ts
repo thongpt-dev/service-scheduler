@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   Patch,
+  ParseUUIDPipe,
   Post,
   Put,
   UseGuards,
@@ -58,6 +59,7 @@ export class CustomerVehiclesControllerV1 {
     description:
       "The authenticated vehicle owner grants the selected active dealership access to this vehicle. Other vehicles remain private to their owner unless separately assigned.",
   })
+  @ApiBadRequestResponse({ description: "Path parameters must be UUIDs." })
   @ApiOkResponse({ description: "Vehicle assigned to dealership." })
   @ApiForbiddenResponse({ description: "Customer profile is required." })
   @ApiNotFoundResponse({
@@ -66,8 +68,8 @@ export class CustomerVehiclesControllerV1 {
   @ApiUnauthorizedResponse({ description: "Missing or invalid bearer token." })
   assignToDealership(
     @CurrentAuth() auth: AuthContext,
-    @Param("vehicleId") vehicleId: string,
-    @Param("dealershipId") dealershipId: string,
+    @Param("vehicleId", ParseUUIDPipe) vehicleId: string,
+    @Param("dealershipId", ParseUUIDPipe) dealershipId: string,
   ) {
     return this.vehiclesService.assignOwnedVehicleToDealership(
       auth,
@@ -94,14 +96,15 @@ export class DealershipCustomerVehiclesControllerV1 {
     description:
       "Returns only vehicles explicitly assigned to this dealership and owned by or shared with the selected dealership customer. A customer/dealership association by itself does not expose vehicles.",
   })
+  @ApiBadRequestResponse({ description: "Path parameters must be UUIDs." })
   @ApiOkResponse({ description: "Customer vehicles returned." })
   @ApiForbiddenResponse({ description: "No access to this dealership." })
   @ApiNotFoundResponse({ description: "Customer not found." })
   @ApiUnauthorizedResponse({ description: "Missing or invalid bearer token." })
   list(
     @CurrentAuth() auth: AuthContext,
-    @Param("dealershipId") dealershipId: string,
-    @Param("customerId") customerId: string,
+    @Param("dealershipId", ParseUUIDPipe) dealershipId: string,
+    @Param("customerId", ParseUUIDPipe) customerId: string,
   ) {
     return this.vehiclesService.listForDealershipCustomer(
       auth,
@@ -112,6 +115,9 @@ export class DealershipCustomerVehiclesControllerV1 {
 
   @Post()
   @ApiOperation({ summary: "Add a vehicle owned by a dealership customer" })
+  @ApiBadRequestResponse({
+    description: "Path parameters and vehicle input must be valid.",
+  })
   @ApiBody({
     type: CreateVehicleDto,
     examples: {
@@ -128,15 +134,14 @@ export class DealershipCustomerVehiclesControllerV1 {
   @ApiCreatedResponse({
     description: "Vehicle created and linked to customer.",
   })
-  @ApiBadRequestResponse({ description: "Invalid vehicle input." })
   @ApiConflictResponse({ description: "VIN is already registered." })
   @ApiForbiddenResponse({ description: "No access to this dealership." })
   @ApiNotFoundResponse({ description: "Customer not found." })
   @ApiUnauthorizedResponse({ description: "Missing or invalid bearer token." })
   create(
     @CurrentAuth() auth: AuthContext,
-    @Param("dealershipId") dealershipId: string,
-    @Param("customerId") customerId: string,
+    @Param("dealershipId", ParseUUIDPipe) dealershipId: string,
+    @Param("customerId", ParseUUIDPipe) customerId: string,
     @Body() body: CreateVehicleDto,
   ) {
     return this.vehiclesService.createForCustomer(
@@ -163,6 +168,9 @@ export class DealershipVehicleControllerV1 {
   @ApiOperation({
     summary: "Update or deactivate a dealership customer's vehicle",
   })
+  @ApiBadRequestResponse({
+    description: "Path parameters and vehicle input must be valid.",
+  })
   @ApiBody({ type: UpdateVehicleDto })
   @ApiOkResponse({ description: "Vehicle updated." })
   @ApiForbiddenResponse({ description: "No access to this dealership." })
@@ -170,8 +178,8 @@ export class DealershipVehicleControllerV1 {
   @ApiUnauthorizedResponse({ description: "Missing or invalid bearer token." })
   update(
     @CurrentAuth() auth: AuthContext,
-    @Param("dealershipId") dealershipId: string,
-    @Param("vehicleId") vehicleId: string,
+    @Param("dealershipId", ParseUUIDPipe) dealershipId: string,
+    @Param("vehicleId", ParseUUIDPipe) vehicleId: string,
     @Body() body: UpdateVehicleDto,
   ) {
     return this.vehiclesService.updateForDealership(
@@ -207,14 +215,17 @@ export class CustomerVehicleAccessControllerV1 {
     },
   })
   @ApiCreatedResponse({ description: "Vehicle access granted." })
-  @ApiBadRequestResponse({ description: "Vehicle owner already has access." })
+  @ApiBadRequestResponse({
+    description:
+      "Path and request vehicle IDs must be UUIDs or the owner already has access.",
+  })
   @ApiForbiddenResponse({ description: "No access to this dealership." })
   @ApiNotFoundResponse({ description: "Customer or vehicle not found." })
   @ApiUnauthorizedResponse({ description: "Missing or invalid bearer token." })
   grant(
     @CurrentAuth() auth: AuthContext,
-    @Param("dealershipId") dealershipId: string,
-    @Param("customerId") customerId: string,
+    @Param("dealershipId", ParseUUIDPipe) dealershipId: string,
+    @Param("customerId", ParseUUIDPipe) customerId: string,
     @Body() body: GrantVehicleAccessDto,
   ) {
     return this.vehiclesService.grantAccess(
@@ -227,6 +238,7 @@ export class CustomerVehicleAccessControllerV1 {
 
   @Delete(":vehicleId")
   @ApiOperation({ summary: "Revoke a customer's shared-vehicle access" })
+  @ApiBadRequestResponse({ description: "Path parameters must be UUIDs." })
   @ApiOkResponse({ description: "Vehicle access revoked." })
   @ApiBadRequestResponse({
     description: "Vehicle ownership cannot be revoked here.",
@@ -238,9 +250,9 @@ export class CustomerVehicleAccessControllerV1 {
   @ApiUnauthorizedResponse({ description: "Missing or invalid bearer token." })
   revoke(
     @CurrentAuth() auth: AuthContext,
-    @Param("dealershipId") dealershipId: string,
-    @Param("customerId") customerId: string,
-    @Param("vehicleId") vehicleId: string,
+    @Param("dealershipId", ParseUUIDPipe) dealershipId: string,
+    @Param("customerId", ParseUUIDPipe) customerId: string,
+    @Param("vehicleId", ParseUUIDPipe) vehicleId: string,
   ) {
     return this.vehiclesService.revokeAccess(
       auth,

@@ -4,7 +4,7 @@
 
 - **Customer:** signs up and signs in with email/password, selects dealerships to associate their profile with, books using a vehicle they own or can access, and views or manages their own appointments. New accounts are tagged unverified; verification is not required for MVP sign-in or booking.
 - **Staff:** accesses only their dealership's data and can book for its customers, including customers without verified email.
-- **Manager:** has staff permissions and can manage dealership services, hours, closures, technicians, qualifications, shifts, leave, bays, and bay capabilities.
+- **Manager:** has staff permissions and can manage dealership services, hours, closures, technicians, qualifications, shifts, leave, bays, and bay capabilities. Resource configuration is dealership-scoped; it does not grant access to customer vehicles unless each vehicle is explicitly assigned to the dealership.
 - **Owner:** has manager permissions and can manage dealership details and staff roles.
 - An authenticated customer or staff account may create a dealership; the API assigns that caller the dealership's initial `owner` membership atomically with dealership creation. This is the MVP onboarding path; no global system-admin role is included.
 
@@ -38,4 +38,4 @@ Use foreign keys, checks, unique constraints, and indexes to protect relationshi
 
 ## Backend capability overview
 
-The backend provides native customer/staff authentication, dealership-scoped customer and vehicle management, dealership onboarding with the creator assigned as owner, shared catalog and dealership-specific service configuration, resource configuration, availability search, and appointment booking/lifecycle operations. The API is versioned under `/api/v1`; implemented and planned endpoints, request/authentication contracts, and response/error conventions are maintained separately in [api.md](api.md). Detailed entities, relationships, and persistence constraints are maintained in [data-model.md](data-model.md).
+The backend provides native customer/staff authentication, dealership-scoped customer and vehicle management, dealership onboarding with the creator assigned as owner, shared catalog and dealership-specific service configuration, dealership hours/closures, technician qualifications/shifts/leave, bays and capabilities. Availability search and appointment booking/lifecycle operations remain planned. The API is versioned under `/api/v1`; implemented and planned endpoints, request/authentication contracts, and response/error conventions are maintained separately in [api.md](api.md). Detailed entities, relationships, and persistence constraints are maintained in [data-model.md](data-model.md).

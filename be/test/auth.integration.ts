@@ -56,7 +56,6 @@ async function run(): Promise<void> {
       JWT_SECRET: jwtSecret,
       JWT_ISSUER: "service-scheduler-auth-integration",
       JWT_AUDIENCE: "service-scheduler-test-clients",
-      JWT_ACCESS_TOKEN_TTL_SECONDS: "900",
     }),
   );
 
@@ -225,6 +224,10 @@ async function run(): Promise<void> {
       registration.accessToken,
     );
     assert(registration.emailVerified === false, "Customer starts unverified");
+    assert(
+      registration.expiresIn === 1800,
+      "Default customer access token lifetime must be 1800 seconds",
+    );
     assert(
       customerAuth.customer?.emailVerifiedAt === null,
       "Unverified customer may authenticate and receives a customer principal",

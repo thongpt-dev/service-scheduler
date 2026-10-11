@@ -1,4 +1,9 @@
-import { ForbiddenException, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -10,6 +15,8 @@ import * as schema from "../src/database/schema";
 import { CustomersService } from "../src/customers/customers.service";
 import { DealershipsService } from "../src/dealerships/dealerships.service";
 import { ServiceCatalogService } from "../src/service-catalog/service-catalog.service";
+import { ServiceBaysService } from "../src/service-bays/service-bays.service";
+import { TechniciansService } from "../src/technicians/technicians.service";
 import { VehiclesService } from "../src/vehicles/vehicles.service";
 
 function assert(condition: boolean, message: string): asserts condition {
@@ -51,13 +58,15 @@ async function run(): Promise<void> {
       JWT_SECRET: "domain-integration-secret-at-least-32-bytes",
       JWT_ISSUER: "service-scheduler-domain-integration",
       JWT_AUDIENCE: "service-scheduler-test-clients",
-      JWT_ACCESS_TOKEN_TTL_SECONDS: "900",
+      JWT_ACCESS_TOKEN_TTL_SECONDS: "1800",
     }),
   );
   const customersService = new CustomersService(db);
   const dealershipsService = new DealershipsService(db);
   const vehiclesService = new VehiclesService(db, customersService);
   const serviceCatalogService = new ServiceCatalogService(db);
+  const serviceBaysService = new ServiceBaysService(db);
+  const techniciansService = new TechniciansService(db);
 
   try {
     execFileSync("npm", ["run", "db:seed"], {
@@ -98,6 +107,28 @@ async function run(): Promise<void> {
         (vehicle) => vehicle.id === "66666666-6666-4666-8666-666666666666",
       ),
       "Customer vehicle endpoint service must include the seeded owned vehicle",
+    );
+    await expectError(
+      () =>
+        techniciansService.deleteQualification(
+          ownerAuth,
+          "11111111-1111-4111-8111-111111111111",
+          "33333333-3333-4333-8333-333333333333",
+          "22222222-2222-4222-8222-222222222222",
+        ),
+      ConflictException,
+      "Appointment history must prevent deleting its technician qualification",
+    );
+    await expectError(
+      () =>
+        serviceBaysService.deleteCapability(
+          ownerAuth,
+          "11111111-1111-4111-8111-111111111111",
+          "44444444-4444-4444-8444-444444444444",
+          "22222222-2222-4222-8222-222222222222",
+        ),
+      ConflictException,
+      "Appointment history must prevent deleting its bay capability",
     );
     const seedDealershipVehicles =
       await vehiclesService.listForDealershipCustomer(
@@ -223,6 +254,107 @@ async function run(): Promise<void> {
       "Active dealership should appear in the authenticated list",
     );
 
+    const mondayHours = await dealershipsService.createHour(
+      newOwnerAuth,
+      dealership.id,
+      {
+        dayOfWeek: 1,
+        openTime: "08:00:00",
+        closeTime: "17:00:00",
+      },
+    );
+    assert(
+      (await dealershipsService.listHours(customerAuth, dealership.id)).some(
+        (entry) => entry.id === mondayHours.id,
+      ),
+      "Customer can read active dealership operating hours",
+    );
+    await expectError(
+      () =>
+        dealershipsService.createHour(newOwnerAuth, dealership.id, {
+          dayOfWeek: 1,
+          openTime: "09:00:00",
+          closeTime: "17:00:00",
+        }),
+      ConflictException,
+      "A dealership cannot have duplicate weekly hours for one day",
+    );
+    await expectError(
+      () =>
+        dealershipsService.updateHour(
+          newOwnerAuth,
+          dealership.id,
+          mondayHours.id,
+          {
+            closeTime: "07:00:00",
+          },
+        ),
+      BadRequestException,
+      "Dealership hours must have a positive time window",
+    );
+    await dealershipsService.updateHour(
+      newOwnerAuth,
+      dealership.id,
+      mondayHours.id,
+      { isClosed: true },
+    );
+    assert(
+      (await dealershipsService.listHours(newOwnerAuth, dealership.id)).some(
+        (entry) =>
+          entry.id === mondayHours.id &&
+          entry.isClosed &&
+          entry.openTime === null &&
+          entry.closeTime === null,
+      ),
+      "Closing a weekly schedule day clears its local-time window",
+    );
+
+    const closure = await dealershipsService.createClosure(
+      newOwnerAuth,
+      dealership.id,
+      {
+        startsAt: "2027-12-25T00:00:00.000Z",
+        endsAt: "2027-12-26T00:00:00.000Z",
+        reason: "Holiday",
+      },
+    );
+    await expectError(
+      () =>
+        dealershipsService.updateClosure(
+          newOwnerAuth,
+          dealership.id,
+          closure.id,
+          {
+            endsAt: "2027-12-24T00:00:00.000Z",
+          },
+        ),
+      BadRequestException,
+      "Closure updates must retain a positive time window",
+    );
+    await dealershipsService.updateClosure(
+      newOwnerAuth,
+      dealership.id,
+      closure.id,
+      { reason: "Updated holiday" },
+    );
+    assert(
+      (await dealershipsService.listClosures(customerAuth, dealership.id)).some(
+        (entry) =>
+          entry.id === closure.id && entry.reason === "Updated holiday",
+      ),
+      "Closure changes are visible to authorized readers",
+    );
+    await dealershipsService.deleteClosure(
+      newOwnerAuth,
+      dealership.id,
+      closure.id,
+    );
+    await expectError(
+      () => dealershipsService.listHours(staffAuth, dealership.id),
+      ForbiddenException,
+      "Staff without membership cannot read another dealership's schedule",
+    );
+
     const customerA = await customersService.createForDealership(
       newOwnerAuth,
       dealership.id,
@@ -335,6 +467,209 @@ async function run(): Promise<void> {
         name: `Domain Test Service ${suffix}`,
         description: "Integration-test catalog item",
       },
+    );
+
+    const technician = await techniciansService.create(
+      newOwnerAuth,
+      dealership.id,
+      { displayName: "Domain Test Technician", employeeCode: `TECH-${suffix}` },
+    );
+    await expectError(
+      () => techniciansService.listByDealership(staffAuth, dealership.id),
+      ForbiddenException,
+      "Staff from another dealership cannot list technicians",
+    );
+    await techniciansService.createQualification(
+      newOwnerAuth,
+      dealership.id,
+      technician.id,
+      {
+        serviceTypeId: serviceType.id,
+        validFrom: "2027-01-01T00:00:00.000Z",
+        validTo: "2028-01-01T00:00:00.000Z",
+      },
+    );
+    await expectError(
+      () =>
+        techniciansService.createQualification(
+          newOwnerAuth,
+          dealership.id,
+          technician.id,
+          {
+            serviceTypeId: serviceType.id,
+            validFrom: "2028-01-01T00:00:00.000Z",
+            validTo: "2027-01-01T00:00:00.000Z",
+          },
+        ),
+      BadRequestException,
+      "Qualification validity must be a positive window",
+    );
+    assert(
+      (
+        await techniciansService.listQualifications(
+          newOwnerAuth,
+          dealership.id,
+          technician.id,
+        )
+      ).length === 1,
+      "Technician qualification can be listed within its dealership scope",
+    );
+    await techniciansService.createShift(
+      newOwnerAuth,
+      dealership.id,
+      technician.id,
+      {
+        dayOfWeek: 1,
+        startLocalTime: "08:00:00",
+        endLocalTime: "16:00:00",
+      },
+    );
+    await expectError(
+      () =>
+        techniciansService.createShift(
+          newOwnerAuth,
+          dealership.id,
+          technician.id,
+          {
+            dayOfWeek: 2,
+            startLocalTime: "17:00:00",
+            endLocalTime: "09:00:00",
+          },
+        ),
+      BadRequestException,
+      "Technician shift must end after it starts",
+    );
+    const [shift] = await techniciansService.listShifts(
+      newOwnerAuth,
+      dealership.id,
+      technician.id,
+    );
+    assert(shift !== undefined, "Technician shift should be listed");
+    await techniciansService.updateShift(
+      newOwnerAuth,
+      dealership.id,
+      technician.id,
+      shift.id,
+      { isActive: false },
+    );
+    assert(
+      !(
+        await techniciansService.listShifts(
+          newOwnerAuth,
+          dealership.id,
+          technician.id,
+        )
+      )[0].isActive,
+      "Technician weekly shift can be deactivated without deleting it",
+    );
+
+    const leave = await techniciansService.createLeave(
+      newOwnerAuth,
+      dealership.id,
+      technician.id,
+      {
+        startsAt: "2027-02-01T09:00:00.000Z",
+        endsAt: "2027-02-02T17:00:00.000Z",
+        reason: "Training",
+      },
+    );
+    await expectError(
+      () =>
+        techniciansService.updateLeave(
+          newOwnerAuth,
+          dealership.id,
+          technician.id,
+          leave.id,
+          {
+            endsAt: "2027-01-31T09:00:00.000Z",
+          },
+        ),
+      BadRequestException,
+      "Technician leave must retain a positive time window",
+    );
+    await techniciansService.updateLeave(
+      newOwnerAuth,
+      dealership.id,
+      technician.id,
+      leave.id,
+      { reason: "Updated training" },
+    );
+    assert(
+      (
+        await techniciansService.listLeaves(
+          newOwnerAuth,
+          dealership.id,
+          technician.id,
+        )
+      ).some((entry) => entry.id === leave.id),
+      "Technician leave can be read and updated within dealership scope",
+    );
+    await techniciansService.deleteLeave(
+      newOwnerAuth,
+      dealership.id,
+      technician.id,
+      leave.id,
+    );
+
+    const serviceBay = await serviceBaysService.create(
+      newOwnerAuth,
+      dealership.id,
+      { bayCode: `DOMAIN-${suffix}` },
+    );
+    await serviceBaysService.createCapability(
+      newOwnerAuth,
+      dealership.id,
+      serviceBay.id,
+      { serviceTypeId: serviceType.id },
+    );
+    assert(
+      (
+        await serviceBaysService.listCapabilities(
+          customerAuth,
+          dealership.id,
+          serviceBay.id,
+        )
+      ).some((entry) => entry.serviceTypeId === serviceType.id),
+      "Bay service capabilities can be configured and read",
+    );
+    await expectError(
+      () =>
+        serviceBaysService.createCapability(
+          newOwnerAuth,
+          dealership.id,
+          serviceBay.id,
+          { serviceTypeId: serviceType.id },
+        ),
+      ConflictException,
+      "Bay service capability cannot be duplicated",
+    );
+    await serviceBaysService.update(
+      newOwnerAuth,
+      dealership.id,
+      serviceBay.id,
+      {
+        isActive: false,
+      },
+    );
+    assert(
+      !(
+        await serviceBaysService.listByDealership(newOwnerAuth, dealership.id)
+      ).find((entry) => entry.id === serviceBay.id)?.isActive,
+      "Service bay can be deactivated without deleting it",
+    );
+    await serviceBaysService.update(
+      newOwnerAuth,
+      dealership.id,
+      serviceBay.id,
+      {
+        isActive: true,
+      },
+    );
+    await serviceBaysService.deleteCapability(
+      newOwnerAuth,
+      dealership.id,
+      serviceBay.id,
+      serviceType.id,
     );
     const offering = await serviceCatalogService.createDealershipService(
       newOwnerAuth,

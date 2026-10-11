@@ -4,10 +4,12 @@ import {
   Get,
   Param,
   Patch,
+  ParseUUIDPipe,
   Post,
   UseGuards,
 } from "@nestjs/common";
 import {
+  ApiBadRequestResponse,
   ApiBearerAuth,
   ApiBody,
   ApiConflictResponse,
@@ -78,6 +80,7 @@ export class ServiceTypesControllerV1 {
   @Patch(":serviceTypeId")
   @AuthRoles("manager", "owner")
   @ApiOperation({ summary: "Update a shared service type" })
+  @ApiBadRequestResponse({ description: "serviceTypeId must be a UUID." })
   @ApiBody({ type: UpdateServiceTypeDto })
   @ApiOkResponse({ description: "Service type updated." })
   @ApiForbiddenResponse({
@@ -87,7 +90,7 @@ export class ServiceTypesControllerV1 {
   @ApiUnauthorizedResponse({ description: "Missing or invalid bearer token." })
   update(
     @CurrentAuth() auth: AuthContext,
-    @Param("serviceTypeId") serviceTypeId: string,
+    @Param("serviceTypeId", ParseUUIDPipe) serviceTypeId: string,
     @Body() body: UpdateServiceTypeDto,
   ) {
     return this.serviceCatalogService.updateServiceType(
@@ -108,16 +111,23 @@ export class DealershipServicesControllerV1 {
 
   @Get()
   @ApiOperation({ summary: "List active services offered by a dealership" })
+  @ApiBadRequestResponse({
+    description: "dealershipId must be a UUID.",
+  })
   @ApiOkResponse({ description: "Dealership service offerings returned." })
   @ApiNotFoundResponse({ description: "Dealership not found." })
   @ApiUnauthorizedResponse({ description: "Missing or invalid bearer token." })
-  list(@Param("dealershipId") dealershipId: string) {
+  list(@Param("dealershipId", ParseUUIDPipe) dealershipId: string) {
     return this.serviceCatalogService.listDealershipServices(dealershipId);
   }
 
   @Post()
   @AuthRoles("manager", "owner")
   @ApiOperation({ summary: "Configure a service offering for a dealership" })
+  @ApiBadRequestResponse({
+    description:
+      "Path ID and service type ID must be UUIDs; request body must be valid.",
+  })
   @ApiBody({
     type: CreateDealershipServiceDto,
     examples: {
@@ -140,7 +150,7 @@ export class DealershipServicesControllerV1 {
   @ApiUnauthorizedResponse({ description: "Missing or invalid bearer token." })
   create(
     @CurrentAuth() auth: AuthContext,
-    @Param("dealershipId") dealershipId: string,
+    @Param("dealershipId", ParseUUIDPipe) dealershipId: string,
     @Body() body: CreateDealershipServiceDto,
   ) {
     return this.serviceCatalogService.createDealershipService(
@@ -155,6 +165,7 @@ export class DealershipServicesControllerV1 {
   @ApiOperation({
     summary: "Update or deactivate a dealership service offering",
   })
+  @ApiBadRequestResponse({ description: "Path parameters must be UUIDs." })
   @ApiBody({ type: UpdateDealershipServiceDto })
   @ApiOkResponse({ description: "Dealership service offering updated." })
   @ApiForbiddenResponse({
@@ -166,8 +177,8 @@ export class DealershipServicesControllerV1 {
   @ApiUnauthorizedResponse({ description: "Missing or invalid bearer token." })
   update(
     @CurrentAuth() auth: AuthContext,
-    @Param("dealershipId") dealershipId: string,
-    @Param("dealershipServiceId") dealershipServiceId: string,
+    @Param("dealershipId", ParseUUIDPipe) dealershipId: string,
+    @Param("dealershipServiceId", ParseUUIDPipe) dealershipServiceId: string,
     @Body() body: UpdateDealershipServiceDto,
   ) {
     return this.serviceCatalogService.updateDealershipService(

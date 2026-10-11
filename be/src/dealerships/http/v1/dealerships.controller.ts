@@ -4,11 +4,13 @@ import {
   Get,
   Param,
   Patch,
+  ParseUUIDPipe,
   Post,
   Put,
   UseGuards,
 } from "@nestjs/common";
 import {
+  ApiBadRequestResponse,
   ApiBearerAuth,
   ApiBody,
   ApiCreatedResponse,
@@ -47,10 +49,11 @@ export class DealershipsControllerV1 {
 
   @Get(":dealershipId")
   @ApiOperation({ summary: "Get an active dealership" })
+  @ApiBadRequestResponse({ description: "dealershipId must be a UUID." })
   @ApiOkResponse({ description: "Dealership returned." })
   @ApiNotFoundResponse({ description: "Dealership not found." })
   @ApiUnauthorizedResponse({ description: "Missing or invalid bearer token." })
-  getById(@Param("dealershipId") dealershipId: string) {
+  getById(@Param("dealershipId", ParseUUIDPipe) dealershipId: string) {
     return this.dealershipsService.getById(dealershipId);
   }
 
@@ -87,6 +90,7 @@ export class DealershipsControllerV1 {
 
   @Patch(":dealershipId")
   @ApiOperation({ summary: "Update dealership details (owner only)" })
+  @ApiBadRequestResponse({ description: "dealershipId must be a UUID." })
   @ApiBody({ type: UpdateDealershipDto })
   @ApiOkResponse({ description: "Dealership updated." })
   @ApiForbiddenResponse({
@@ -96,7 +100,7 @@ export class DealershipsControllerV1 {
   @ApiUnauthorizedResponse({ description: "Missing or invalid bearer token." })
   update(
     @CurrentAuth() auth: AuthContext,
-    @Param("dealershipId") dealershipId: string,
+    @Param("dealershipId", ParseUUIDPipe) dealershipId: string,
     @Body() body: UpdateDealershipDto,
   ) {
     return this.dealershipsService.update(auth, dealershipId, body);
@@ -105,6 +109,7 @@ export class DealershipsControllerV1 {
   @Get(":dealershipId/memberships")
   @AuthRoles("manager", "owner")
   @ApiOperation({ summary: "List dealership memberships" })
+  @ApiBadRequestResponse({ description: "dealershipId must be a UUID." })
   @ApiOkResponse({ description: "Dealership membership roles returned." })
   @ApiForbiddenResponse({
     description: "Owner or manager membership in this dealership is required.",
@@ -112,7 +117,7 @@ export class DealershipsControllerV1 {
   @ApiNotFoundResponse({ description: "Dealership not found." })
   listMemberships(
     @CurrentAuth() auth: AuthContext,
-    @Param("dealershipId") dealershipId: string,
+    @Param("dealershipId", ParseUUIDPipe) dealershipId: string,
   ) {
     return this.dealershipsService.listMemberships(auth, dealershipId);
   }
@@ -141,13 +146,14 @@ export class CustomerDealershipsControllerV1 {
     description:
       "The customer opts in to the dealership association. Repeating the request is safe.",
   })
+  @ApiBadRequestResponse({ description: "dealershipId must be a UUID." })
   @ApiOkResponse({ description: "Customer is associated with the dealership." })
   @ApiForbiddenResponse({ description: "Customer profile is required." })
   @ApiNotFoundResponse({ description: "Active dealership not found." })
   @ApiUnauthorizedResponse({ description: "Missing or invalid bearer token." })
   associate(
     @CurrentAuth() auth: AuthContext,
-    @Param("dealershipId") dealershipId: string,
+    @Param("dealershipId", ParseUUIDPipe) dealershipId: string,
   ) {
     return this.dealershipsService.associateCustomer(auth, dealershipId);
   }

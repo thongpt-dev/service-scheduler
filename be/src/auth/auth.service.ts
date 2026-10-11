@@ -481,7 +481,7 @@ export class AuthService {
     }
 
     const expiresInSeconds = Number(
-      this.config.get<string>("JWT_ACCESS_TOKEN_TTL_SECONDS") ?? "900",
+      this.config.get<string>("JWT_ACCESS_TOKEN_TTL_SECONDS") ?? "1800",
     );
     if (
       !Number.isInteger(expiresInSeconds) ||

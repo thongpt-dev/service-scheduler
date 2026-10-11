@@ -4,7 +4,9 @@ import { AuthModule } from "./auth/auth.module";
 import { CustomersModule } from "./customers/customers.module";
 import { DealershipsModule } from "./dealerships/dealerships.module";
 import { ServiceCatalogModule } from "./service-catalog/service-catalog.module";
+import { ServiceBaysModule } from "./service-bays/service-bays.module";
 import { SystemModule } from "./system/system.module";
+import { TechniciansModule } from "./technicians/technicians.module";
 import { VehiclesModule } from "./vehicles/vehicles.module";
 
 @Module({
@@ -15,6 +17,8 @@ import { VehiclesModule } from "./vehicles/vehicles.module";
     DealershipsModule,
     VehiclesModule,
     ServiceCatalogModule,
+    ServiceBaysModule,
+    TechniciansModule,
     SystemModule,
   ],
 })

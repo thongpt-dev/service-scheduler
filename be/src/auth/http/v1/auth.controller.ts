@@ -58,7 +58,7 @@ export class AuthController {
       example: {
         accessToken: "<signed-jwt>",
         tokenType: "Bearer",
-        expiresIn: 900,
+        expiresIn: 1800,
         customerId: "6f57aa38-1dc5-4b52-9b18-aead80f04ba1",
         emailVerified: false,
       },
@@ -96,7 +96,7 @@ export class AuthController {
       example: {
         accessToken: "<signed-jwt>",
         tokenType: "Bearer",
-        expiresIn: 900,
+        expiresIn: 1800,
       },
     },
   })
@@ -130,7 +130,7 @@ export class AuthController {
       example: {
         accessToken: "<signed-jwt>",
         tokenType: "Bearer",
-        expiresIn: 900,
+        expiresIn: 1800,
       },
     },
   })
