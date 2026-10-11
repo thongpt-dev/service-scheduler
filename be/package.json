@@ -16,7 +16,8 @@
     "db:seed": "ts-node src/database/seed.ts",
     "lint": "eslint \"{src,test}/**/*.ts\"",
     "test": "jest --runInBand",
-    "test:db": "ts-node test/db/database.integration.ts && ts-node test/db/auth.integration.ts && ts-node test/db/domain.integration.ts",
+    "test:db": "ts-node test/db/database.integration.ts && ts-node test/db/auth.integration.ts && ts-node test/db/domain.integration.ts && npm run test:api",
+    "test:api": "ts-node test/http/api-flows.integration.ts",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage --runInBand"
   },

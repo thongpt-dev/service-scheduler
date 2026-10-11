@@ -55,4 +55,10 @@ docker compose exec postgres createdb -U postgres service_scheduler_test
 TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/service_scheduler_test npm run test:db
 ```
 
-`test:db` runs schema/seed/capacity, authentication, domain API, availability, booking, and appointment lifecycle integration checks against the dedicated test database.
+`test:db` resets only the guarded `service_scheduler_test` database, applies migrations, then runs schema, authentication, domain, and HTTP API flow integration checks. The HTTP flow runner also has a standalone command for an already-migrated dedicated test database:
+
+```sh
+TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/service_scheduler_test npm run test:api
+```
+
+`test:api` refuses databases other than `service_scheduler_test`, starts the real Nest application on an ephemeral loopback port, runs HTTP flows with the seeded demo accounts, and cancels appointments it created. It does not reset the database.

@@ -2,6 +2,8 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -172,6 +174,7 @@ export class AppointmentLifecycleControllerV1 {
   constructor(private readonly appointmentsService: AppointmentsService) {}
 
   @Post(":appointmentId/cancel")
+  @HttpCode(HttpStatus.OK)
   @AuthRoles("customer", "owner", "manager", "staff")
   @ApiOperation({
     summary: "Cancel a confirmed appointment",
@@ -191,6 +194,7 @@ export class AppointmentLifecycleControllerV1 {
   }
 
   @Post(":appointmentId/reschedule")
+  @HttpCode(HttpStatus.OK)
   @AuthRoles("customer", "owner", "manager", "staff")
   @ApiOperation({
     summary: "Reschedule a confirmed appointment",
