@@ -10,6 +10,13 @@ import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
+import { AvailabilityService } from "../src/availability/availability.service";
+import {
+  addCalendarDays,
+  formatLocalDate,
+  getLocalDateTimeParts,
+  parseLocalDate,
+} from "../src/availability/timezone.util";
 import { AuthService } from "../src/auth/auth.service";
 import * as schema from "../src/database/schema";
 import { CustomersService } from "../src/customers/customers.service";
@@ -23,6 +30,28 @@ function assert(condition: boolean, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function nextWeekdayDate(timeZone: string, weekday?: number): string {
+  const today = formatLocalDate(getLocalDateTimeParts(new Date(), timeZone));
+  for (let offset = 1; offset <= 14; offset += 1) {
+    const date = addCalendarDays(today, offset);
+    const parts = parseLocalDate(date);
+    if (!parts) {
+      continue;
+    }
+    const dayOfWeek = new Date(
+      Date.UTC(parts.year, parts.month - 1, parts.day),
+    ).getUTCDay();
+    if (
+      weekday === undefined
+        ? dayOfWeek >= 1 && dayOfWeek <= 5
+        : dayOfWeek === weekday
+    ) {
+      return date;
+    }
+  }
+  throw new Error("Could not find a weekday in the next two weeks");
 }
 
 async function expectError(
@@ -61,6 +90,7 @@ async function run(): Promise<void> {
       JWT_ACCESS_TOKEN_TTL_SECONDS: "1800",
     }),
   );
+  const availabilityService = new AvailabilityService(db);
   const customersService = new CustomersService(db);
   const dealershipsService = new DealershipsService(db);
   const vehiclesService = new VehiclesService(db, customersService);
@@ -107,6 +137,305 @@ async function run(): Promise<void> {
         (vehicle) => vehicle.id === "66666666-6666-4666-8666-666666666666",
       ),
       "Customer vehicle endpoint service must include the seeded owned vehicle",
+    );
+    const sampleDealershipId = "11111111-1111-4111-8111-111111111111";
+    const sampleVehicleId = "66666666-6666-4666-8666-666666666666";
+    const sampleServiceTypeId = "22222222-2222-4222-8222-222222222222";
+    const availabilityDate = nextWeekdayDate("America/Los_Angeles");
+    const customerAvailability = await availabilityService.getAvailability(
+      customerAuth,
+      {
+        dealershipId: sampleDealershipId,
+        vehicleId: sampleVehicleId,
+        serviceTypeId: sampleServiceTypeId,
+        date: availabilityDate,
+      },
+    );
+    assert(
+      customerAvailability.slots.length > 0 &&
+        customerAvailability.timezone === "America/Los_Angeles" &&
+        customerAvailability.durationMinutes === 60 &&
+        customerAvailability.slots.every(
+          (slot) =>
+            new Date(slot.endsAt).getTime() -
+              new Date(slot.startsAt).getTime() ===
+            60 * 60 * 1000,
+        ),
+      "Customer availability uses assigned vehicle, dealership timezone, and active offering duration",
+    );
+    const staffAvailability = await availabilityService.getAvailability(
+      ownerAuth,
+      {
+        dealershipId: sampleDealershipId,
+        vehicleId: sampleVehicleId,
+        serviceTypeId: sampleServiceTypeId,
+        customerId: sampleCustomer.id,
+        date: availabilityDate,
+      },
+    );
+    assert(
+      staffAvailability.slots.length === customerAvailability.slots.length,
+      "Dealership staff can search availability for an associated customer",
+    );
+    const closedSaturday = await availabilityService.getAvailability(
+      customerAuth,
+      {
+        dealershipId: sampleDealershipId,
+        vehicleId: sampleVehicleId,
+        serviceTypeId: sampleServiceTypeId,
+        date: nextWeekdayDate("America/Los_Angeles", 6),
+      },
+    );
+    assert(
+      closedSaturday.slots.length === 0,
+      "Closed dealership weekdays must not produce availability slots",
+    );
+    const firstSlot = customerAvailability.slots[0];
+    assert(firstSlot !== undefined, "Expected at least one candidate slot");
+    await db.insert(schema.appointments).values({
+      appointmentRef: `AVAIL-${randomUUID().slice(0, 8)}`,
+      customerId: sampleCustomer.id,
+      vehicleId: sampleVehicleId,
+      dealershipId: sampleDealershipId,
+      serviceTypeId: sampleServiceTypeId,
+      assignedTechnicianId: "33333333-3333-4333-8333-333333333333",
+      assignedBayId: "44444444-4444-4444-8444-444444444444",
+      createdByUserId: ownerAuth.userId,
+      bookingChannel: "customer_self_service",
+      status: "confirmed",
+      startsAt: new Date(firstSlot.startsAt),
+      endsAt: new Date(firstSlot.endsAt),
+      serviceNameSnapshot: "Standard Maintenance",
+      durationMinutesSnapshot: 60,
+    });
+    const availabilityAfterConfirmation =
+      await availabilityService.getAvailability(customerAuth, {
+        dealershipId: sampleDealershipId,
+        vehicleId: sampleVehicleId,
+        serviceTypeId: sampleServiceTypeId,
+        date: availabilityDate,
+      });
+    assert(
+      !availabilityAfterConfirmation.slots.some(
+        (slot) => slot.startsAt === firstSlot.startsAt,
+      ),
+      "Confirmed appointments must remove resource-conflicting availability slots",
+    );
+    const unblockedSlot = availabilityAfterConfirmation.slots[0];
+    assert(
+      unblockedSlot !== undefined,
+      "Expected another unblocked candidate slot",
+    );
+
+    const availabilityClosure = await dealershipsService.createClosure(
+      ownerAuth,
+      sampleDealershipId,
+      {
+        startsAt: unblockedSlot.startsAt,
+        endsAt: unblockedSlot.endsAt,
+        reason: "Availability integration closure",
+      },
+    );
+    const availabilityDuringClosure = await availabilityService.getAvailability(
+      customerAuth,
+      {
+        dealershipId: sampleDealershipId,
+        vehicleId: sampleVehicleId,
+        serviceTypeId: sampleServiceTypeId,
+        date: availabilityDate,
+      },
+    );
+    assert(
+      !availabilityDuringClosure.slots.some(
+        (slot) => slot.startsAt === unblockedSlot.startsAt,
+      ),
+      "Dated dealership closures must block overlapping candidate slots",
+    );
+    await dealershipsService.deleteClosure(
+      ownerAuth,
+      sampleDealershipId,
+      availabilityClosure.id,
+    );
+
+    const availabilityLeave = await techniciansService.createLeave(
+      ownerAuth,
+      sampleDealershipId,
+      "33333333-3333-4333-8333-333333333333",
+      {
+        startsAt: unblockedSlot.startsAt,
+        endsAt: unblockedSlot.endsAt,
+        reason: "Availability integration leave",
+      },
+    );
+    const availabilityDuringLeave = await availabilityService.getAvailability(
+      customerAuth,
+      {
+        dealershipId: sampleDealershipId,
+        vehicleId: sampleVehicleId,
+        serviceTypeId: sampleServiceTypeId,
+        date: availabilityDate,
+      },
+    );
+    assert(
+      !availabilityDuringLeave.slots.some(
+        (slot) => slot.startsAt === unblockedSlot.startsAt,
+      ),
+      "Technician leave must block overlapping candidate slots",
+    );
+    await techniciansService.deleteLeave(
+      ownerAuth,
+      sampleDealershipId,
+      "33333333-3333-4333-8333-333333333333",
+      availabilityLeave.id,
+    );
+
+    await techniciansService.updateQualification(
+      ownerAuth,
+      sampleDealershipId,
+      "33333333-3333-4333-8333-333333333333",
+      sampleServiceTypeId,
+      { validTo: unblockedSlot.startsAt },
+    );
+    const availabilityOutsideQualification =
+      await availabilityService.getAvailability(customerAuth, {
+        dealershipId: sampleDealershipId,
+        vehicleId: sampleVehicleId,
+        serviceTypeId: sampleServiceTypeId,
+        date: availabilityDate,
+      });
+    assert(
+      availabilityOutsideQualification.slots.length === 0,
+      "Expired technician qualification must remove availability",
+    );
+    await techniciansService.updateQualification(
+      ownerAuth,
+      sampleDealershipId,
+      "33333333-3333-4333-8333-333333333333",
+      sampleServiceTypeId,
+      { validTo: null },
+    );
+
+    const seededShifts = await techniciansService.listShifts(
+      ownerAuth,
+      sampleDealershipId,
+      "33333333-3333-4333-8333-333333333333",
+    );
+    for (const shift of seededShifts) {
+      await techniciansService.updateShift(
+        ownerAuth,
+        sampleDealershipId,
+        "33333333-3333-4333-8333-333333333333",
+        shift.id,
+        { isActive: false },
+      );
+    }
+    const availabilityWithoutShift = await availabilityService.getAvailability(
+      customerAuth,
+      {
+        dealershipId: sampleDealershipId,
+        vehicleId: sampleVehicleId,
+        serviceTypeId: sampleServiceTypeId,
+        date: availabilityDate,
+      },
+    );
+    assert(
+      availabilityWithoutShift.slots.length === 0,
+      "A technician without an active shift must not provide availability",
+    );
+    for (const shift of seededShifts) {
+      await techniciansService.updateShift(
+        ownerAuth,
+        sampleDealershipId,
+        "33333333-3333-4333-8333-333333333333",
+        shift.id,
+        { isActive: true },
+      );
+    }
+
+    const brakeServiceTypeId = "22222222-2222-4222-8222-222222222223";
+    await serviceCatalogService.createDealershipService(
+      ownerAuth,
+      sampleDealershipId,
+      { serviceTypeId: brakeServiceTypeId, durationMinutes: 60 },
+    );
+    await techniciansService.createQualification(
+      ownerAuth,
+      sampleDealershipId,
+      "33333333-3333-4333-8333-333333333333",
+      { serviceTypeId: brakeServiceTypeId },
+    );
+    const availabilityWithoutCompatibleBay =
+      await availabilityService.getAvailability(customerAuth, {
+        dealershipId: sampleDealershipId,
+        vehicleId: sampleVehicleId,
+        serviceTypeId: brakeServiceTypeId,
+        date: availabilityDate,
+      });
+    assert(
+      availabilityWithoutCompatibleBay.slots.length === 0,
+      "A service without an active compatible bay must not provide availability",
+    );
+    await serviceBaysService.createCapability(
+      ownerAuth,
+      sampleDealershipId,
+      "44444444-4444-4444-8444-444444444444",
+      { serviceTypeId: brakeServiceTypeId },
+    );
+    const availabilityWithCompatibleBay =
+      await availabilityService.getAvailability(customerAuth, {
+        dealershipId: sampleDealershipId,
+        vehicleId: sampleVehicleId,
+        serviceTypeId: brakeServiceTypeId,
+        date: availabilityDate,
+      });
+    assert(
+      availabilityWithCompatibleBay.slots.length > 0,
+      "An active compatible bay allows otherwise eligible slots",
+    );
+
+    await expectError(
+      () =>
+        availabilityService.getAvailability(ownerAuth, {
+          dealershipId: sampleDealershipId,
+          vehicleId: sampleVehicleId,
+          serviceTypeId: sampleServiceTypeId,
+          date: availabilityDate,
+        }),
+      BadRequestException,
+      "Staff-assisted availability requires a customerId",
+    );
+    await expectError(
+      () =>
+        availabilityService.getAvailability(customerAuth, {
+          dealershipId: sampleDealershipId,
+          vehicleId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          serviceTypeId: sampleServiceTypeId,
+          date: availabilityDate,
+        }),
+      NotFoundException,
+      "An unassigned vehicle cannot be used for dealership availability",
+    );
+    await expectError(
+      () =>
+        availabilityService.getAvailability(customerAuth, {
+          dealershipId: "11111111-1111-4111-8111-111111111112",
+          vehicleId: sampleVehicleId,
+          serviceTypeId: sampleServiceTypeId,
+          date: availabilityDate,
+        }),
+      NotFoundException,
+      "A vehicle assignment at another dealership does not grant access here",
+    );
+    await expectError(
+      () =>
+        availabilityService.getAvailability(customerAuth, {
+          dealershipId: sampleDealershipId,
+          vehicleId: sampleVehicleId,
+          serviceTypeId: sampleServiceTypeId,
+          date: addCalendarDays(availabilityDate, 61),
+        }),
+      BadRequestException,
+      "Availability date must stay within the 60-day booking horizon",
     );
     await expectError(
       () =>

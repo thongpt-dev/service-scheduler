@@ -52,6 +52,7 @@ This document is the API contract reference for the backend MVP. The product sco
 | `GET /api/v1/dealerships/{dealershipId}/services` | Customer or staff JWT | List active service offerings for a dealership. | `200` |
 | `POST /api/v1/dealerships/{dealershipId}/services` | Owner or manager in that dealership | Add an active shared service type to the dealership with its configured duration. | `201` |
 | `PATCH /api/v1/dealerships/{dealershipId}/services/{dealershipServiceId}` | Owner or manager in that dealership | Change the dealership-specific duration or deactivate the offering. | `200` |
+| `GET /api/v1/availability?dealershipId={id}&vehicleId={id}&serviceTypeId={id}&date={YYYY-MM-DD}` | Customer JWT for self; dealership staff JWT with `customerId` for assisted lookup | Return advisory candidate starts using the dealership-local date, explicit vehicle assignment, active service duration, hours/closures, technician qualification/shift/leave, bay capability, and confirmed appointments. Does not reserve a slot. | `200` |
 
 ### Authentication request examples
 
@@ -95,8 +96,6 @@ The following business endpoints are in the MVP plan but are not yet implemented
 
 | Feature | Planned routes/capabilities | Access scope |
 | --- | --- | --- |
-| Technicians and bays | Staff listings; manage technicians, qualifications, shifts, leave, bays, and service capabilities. | Reads scoped to staff dealership; manager/owner configuration. |
-| Availability | `GET /api/v1/availability?dealershipId=&vehicleId=&serviceTypeId=&date=` | Authenticated and authorized for the vehicle/dealership. Returns candidate starts, service duration, and dealership timezone; does not hold a slot. |
 | Appointments | Create self-service and staff-assisted bookings; list/read appointments; search a dealership schedule; cancel and reschedule. | Customers access their own authorized appointments; staff access only their dealership and permitted actions. |
 
 ## Booking request contract
