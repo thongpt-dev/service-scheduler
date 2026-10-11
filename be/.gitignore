@@ -1,0 +1,15 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+.nest/
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+
+# Logs and caches
+*.log
+*.tsbuildinfo
+.DS_Store
