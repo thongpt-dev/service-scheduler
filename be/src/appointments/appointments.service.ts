@@ -6,28 +6,25 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { and, eq, gt, inArray, lte, lt, or } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lte, lt, or } from "drizzle-orm";
 import type { AuthContext } from "../auth/auth.types";
 import { InjectDb, type Database } from "../database/database.types";
 import {
   appointments,
-  bayServiceCapabilities,
+  appointmentAuditEvents,
   customerVehicleAccess,
   customers,
-  dealershipClosures,
   dealershipCustomers,
-  dealershipHours,
   dealershipServices,
   dealershipVehicles,
   dealerships,
   idempotencyRecords,
-  serviceBays,
   serviceTypes,
-  technicianLeaves,
-  technicianQualifications,
-  technicianShifts,
-  technicians,
   vehicles,
+} from "../database/schema";
+import type {
+  AppointmentAuditAction,
+  AppointmentStatus,
 } from "../database/schema";
 import { requireDealershipRole } from "../domain/dealership-access";
 import {
@@ -35,11 +32,11 @@ import {
   CreateStaffAssistedAppointmentDto,
 } from "./dto/create-appointment.dto";
 import {
-  formatLocalDate,
-  getLocalDateTimeParts,
-  parseLocalDate,
-  resolveLocalDateTime,
-} from "../availability/timezone.util";
+  CustomerAppointmentListQueryDto,
+  DealershipAppointmentListQueryDto,
+  RescheduleAppointmentDto,
+} from "./dto/appointment-lifecycle.dto";
+import { allocateAppointmentResources } from "./appointment-scheduling.util";
 
 const minimumNoticeMilliseconds = 2 * 60 * 60 * 1000;
 const bookingHorizonMilliseconds = 60 * 24 * 60 * 60 * 1000;
@@ -57,6 +54,8 @@ interface BookingResult {
   appointment: typeof appointments.$inferSelect;
   replayed: boolean;
 }
+
+type BookingTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 function databaseErrorCode(error: unknown): string | undefined {
   if (error && typeof error === "object" && "code" in error) {
@@ -126,6 +125,386 @@ export class AppointmentsService {
       "staff",
     ]);
     return this.createBooking(auth, input, idempotencyKey, "staff_assisted");
+  }
+
+  async listCustomerAppointments(
+    auth: AuthContext,
+    query: CustomerAppointmentListQueryDto,
+  ) {
+    if (!auth.customer) {
+      throw new ForbiddenException("Customer profile is required");
+    }
+    const now = new Date();
+    const conditions = [eq(appointments.customerId, auth.customer.id)];
+    conditions.push(
+      query.period === "past"
+        ? lt(appointments.startsAt, now)
+        : gte(appointments.startsAt, now),
+    );
+    if (query.status) {
+      conditions.push(eq(appointments.status, query.status));
+    }
+    const rows = await this.db
+      .select()
+      .from(appointments)
+      .where(and(...conditions))
+      .orderBy(
+        query.period === "past"
+          ? desc(appointments.startsAt)
+          : asc(appointments.startsAt),
+      )
+      .limit(query.limit + 1)
+      .offset(query.offset);
+    return this.page(rows, query.limit, query.offset);
+  }
+
+  async getCustomerAppointment(auth: AuthContext, appointmentId: string) {
+    if (!auth.customer) {
+      throw new ForbiddenException("Customer profile is required");
+    }
+    const [appointment] = await this.db
+      .select()
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.id, appointmentId),
+          eq(appointments.customerId, auth.customer.id),
+        ),
+      )
+      .limit(1);
+    if (!appointment) {
+      throw new NotFoundException("Appointment not found");
+    }
+    return appointment;
+  }
+
+  async listDealershipAppointments(
+    auth: AuthContext,
+    dealershipId: string,
+    query: DealershipAppointmentListQueryDto,
+  ) {
+    requireDealershipRole(auth, dealershipId, ["owner", "manager", "staff"]);
+    const from = new Date(query.from);
+    const to = new Date(query.to);
+    if (
+      Number.isNaN(from.getTime()) ||
+      Number.isNaN(to.getTime()) ||
+      from >= to
+    ) {
+      throw new BadRequestException("from must be earlier than to");
+    }
+    const conditions = [
+      eq(appointments.dealershipId, dealershipId),
+      gte(appointments.startsAt, from),
+      lt(appointments.startsAt, to),
+    ];
+    if (query.status) {
+      conditions.push(eq(appointments.status, query.status));
+    }
+    if (query.customerId) {
+      conditions.push(eq(appointments.customerId, query.customerId));
+    }
+    const rows = await this.db
+      .select()
+      .from(appointments)
+      .where(and(...conditions))
+      .orderBy(asc(appointments.startsAt), asc(appointments.id))
+      .limit(query.limit + 1)
+      .offset(query.offset);
+    return this.page(rows, query.limit, query.offset);
+  }
+
+  async getDealershipAppointment(
+    auth: AuthContext,
+    dealershipId: string,
+    appointmentId: string,
+  ) {
+    requireDealershipRole(auth, dealershipId, ["owner", "manager", "staff"]);
+    const [appointment] = await this.db
+      .select()
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.id, appointmentId),
+          eq(appointments.dealershipId, dealershipId),
+        ),
+      )
+      .limit(1);
+    if (!appointment) {
+      throw new NotFoundException("Appointment not found");
+    }
+    return appointment;
+  }
+
+  async cancelAppointment(auth: AuthContext, appointmentId: string) {
+    return this.db.transaction(async (tx) => {
+      const appointment = await this.lockAppointment(tx, appointmentId);
+      this.requireAppointmentAccess(auth, appointment);
+      this.requireConfirmedFutureAppointment(appointment);
+      const [cancelled] = await tx
+        .update(appointments)
+        .set({ status: "cancelled", updatedAt: new Date() })
+        .where(eq(appointments.id, appointmentId))
+        .returning();
+      if (!cancelled) {
+        throw new NotFoundException("Appointment not found");
+      }
+      await this.recordLifecycleEvent(tx, {
+        appointment,
+        actorUserId: auth.userId,
+        action: "cancelled",
+        newStatus: "cancelled",
+      });
+      return cancelled;
+    });
+  }
+
+  async rescheduleAppointment(
+    auth: AuthContext,
+    appointmentId: string,
+    input: RescheduleAppointmentDto,
+  ) {
+    const startsAt = new Date(input.startsAt);
+    const now = new Date();
+    if (
+      Number.isNaN(startsAt.getTime()) ||
+      startsAt.getTime() < now.getTime() + minimumNoticeMilliseconds ||
+      startsAt.getTime() > now.getTime() + bookingHorizonMilliseconds
+    ) {
+      throw new BadRequestException(
+        "startsAt must be at least 2 hours and no more than 60 days in the future",
+      );
+    }
+    try {
+      return await this.db.transaction(async (tx) => {
+        const appointment = await this.lockAppointment(tx, appointmentId);
+        this.requireAppointmentAccess(auth, appointment);
+        this.requireConfirmedFutureAppointment(appointment);
+        const dealership = await this.requireActiveDealership(
+          tx,
+          appointment.dealershipId,
+        );
+        await this.requireActiveCustomerAndOffering(tx, appointment);
+        await this.requireCustomerVehicleAccess(
+          tx,
+          appointment.dealershipId,
+          appointment.customerId,
+          appointment.vehicleId,
+        );
+        const allocation = await allocateAppointmentResources(tx, {
+          dealershipId: appointment.dealershipId,
+          timezone: dealership.timezone,
+          serviceTypeId: appointment.serviceTypeId,
+          startsAt,
+          durationMinutes: appointment.durationMinutesSnapshot,
+          ignoredAppointmentId: appointment.id,
+        });
+        const [updated] = await tx
+          .update(appointments)
+          .set({
+            startsAt: allocation.startsAt,
+            endsAt: allocation.endsAt,
+            assignedTechnicianId: allocation.technicianId,
+            assignedBayId: allocation.bayId,
+            updatedAt: now,
+          })
+          .where(eq(appointments.id, appointment.id))
+          .returning();
+        if (!updated) {
+          throw new NotFoundException("Appointment not found");
+        }
+        await this.recordLifecycleEvent(tx, {
+          appointment,
+          actorUserId: auth.userId,
+          action: "rescheduled",
+          newStatus: appointment.status,
+          newStartsAt: updated.startsAt,
+          newEndsAt: updated.endsAt,
+          newTechnicianId: updated.assignedTechnicianId,
+          newBayId: updated.assignedBayId,
+        });
+        return updated;
+      });
+    } catch (error) {
+      if (databaseErrorCode(error) === "23P01") {
+        throw slotUnavailable(
+          "Another booking has taken the requested resources",
+        );
+      }
+      throw error;
+    }
+  }
+
+  async updateAppointmentStatus(
+    auth: AuthContext,
+    appointmentId: string,
+    status: "completed" | "no_show",
+  ) {
+    return this.db.transaction(async (tx) => {
+      const appointment = await this.lockAppointment(tx, appointmentId);
+      if (
+        !auth.memberships.some(
+          (membership) => membership.dealershipId === appointment.dealershipId,
+        )
+      ) {
+        throw new NotFoundException("Appointment not found");
+      }
+      if (appointment.status !== "confirmed") {
+        throw new ConflictException({
+          code: "APPOINTMENT_NOT_MODIFIABLE",
+          message: "Only confirmed appointments can change status",
+        });
+      }
+      const now = new Date();
+      if (
+        (status === "no_show" && appointment.startsAt > now) ||
+        (status === "completed" && appointment.endsAt > now)
+      ) {
+        throw new ConflictException({
+          code: "APPOINTMENT_NOT_READY_FOR_STATUS",
+          message:
+            status === "no_show"
+              ? "An appointment cannot be marked no-show before it starts"
+              : "An appointment cannot be completed before its scheduled end",
+        });
+      }
+      const [updated] = await tx
+        .update(appointments)
+        .set({ status, updatedAt: now })
+        .where(eq(appointments.id, appointment.id))
+        .returning();
+      if (!updated) {
+        throw new NotFoundException("Appointment not found");
+      }
+      await this.recordLifecycleEvent(tx, {
+        appointment,
+        actorUserId: auth.userId,
+        action: status,
+        newStatus: status,
+      });
+      return updated;
+    });
+  }
+
+  private page<T>(items: T[], limit: number, offset: number) {
+    return {
+      items: items.slice(0, limit),
+      limit,
+      offset,
+      hasMore: items.length > limit,
+    };
+  }
+
+  private async lockAppointment(tx: BookingTransaction, appointmentId: string) {
+    const [appointment] = await tx
+      .select()
+      .from(appointments)
+      .where(eq(appointments.id, appointmentId))
+      .limit(1)
+      .for("update");
+    if (!appointment) {
+      throw new NotFoundException("Appointment not found");
+    }
+    return appointment;
+  }
+
+  private requireAppointmentAccess(
+    auth: AuthContext,
+    appointment: typeof appointments.$inferSelect,
+  ): void {
+    const ownsAppointment = auth.customer?.id === appointment.customerId;
+    const belongsToDealership = auth.memberships.some(
+      (membership) => membership.dealershipId === appointment.dealershipId,
+    );
+    if (!ownsAppointment && !belongsToDealership) {
+      throw new NotFoundException("Appointment not found");
+    }
+  }
+
+  private requireConfirmedFutureAppointment(
+    appointment: typeof appointments.$inferSelect,
+  ): void {
+    if (
+      appointment.status !== "confirmed" ||
+      appointment.startsAt <= new Date()
+    ) {
+      throw new ConflictException({
+        code: "APPOINTMENT_NOT_MODIFIABLE",
+        message:
+          "Only confirmed appointments that have not started can be changed",
+      });
+    }
+  }
+
+  private async requireActiveCustomerAndOffering(
+    tx: BookingTransaction,
+    appointment: typeof appointments.$inferSelect,
+  ): Promise<void> {
+    const [customer] = await tx
+      .select({ id: customers.id })
+      .from(dealershipCustomers)
+      .innerJoin(customers, eq(customers.id, dealershipCustomers.customerId))
+      .where(
+        and(
+          eq(dealershipCustomers.dealershipId, appointment.dealershipId),
+          eq(dealershipCustomers.customerId, appointment.customerId),
+          eq(customers.isActive, true),
+        ),
+      )
+      .limit(1);
+    const [offering] = await tx
+      .select({ serviceTypeId: dealershipServices.serviceTypeId })
+      .from(dealershipServices)
+      .innerJoin(
+        serviceTypes,
+        eq(serviceTypes.id, dealershipServices.serviceTypeId),
+      )
+      .where(
+        and(
+          eq(dealershipServices.dealershipId, appointment.dealershipId),
+          eq(dealershipServices.serviceTypeId, appointment.serviceTypeId),
+          eq(dealershipServices.isActive, true),
+          eq(serviceTypes.isActive, true),
+        ),
+      )
+      .limit(1);
+    if (!customer || !offering) {
+      throw new NotFoundException(
+        "Appointment is no longer eligible to reschedule",
+      );
+    }
+  }
+
+  private async recordLifecycleEvent(
+    tx: BookingTransaction,
+    event: {
+      appointment: typeof appointments.$inferSelect;
+      actorUserId: string;
+      action: AppointmentAuditAction;
+      newStatus: AppointmentStatus;
+      newStartsAt?: Date;
+      newEndsAt?: Date;
+      newTechnicianId?: string;
+      newBayId?: string;
+    },
+  ): Promise<void> {
+    await tx.insert(appointmentAuditEvents).values({
+      appointmentId: event.appointment.id,
+      actorUserId: event.actorUserId,
+      action: event.action,
+      previousStatus: event.appointment.status,
+      newStatus: event.newStatus,
+      previousStartsAt: event.newStartsAt ? event.appointment.startsAt : null,
+      newStartsAt: event.newStartsAt ?? null,
+      previousEndsAt: event.newEndsAt ? event.appointment.endsAt : null,
+      newEndsAt: event.newEndsAt ?? null,
+      previousTechnicianId: event.newTechnicianId
+        ? event.appointment.assignedTechnicianId
+        : null,
+      newTechnicianId: event.newTechnicianId ?? null,
+      previousBayId: event.newBayId ? event.appointment.assignedBayId : null,
+      newBayId: event.newBayId ?? null,
+    });
   }
 
   private async createBooking(
@@ -287,250 +666,13 @@ export class AppointmentsService {
           throw new NotFoundException("Active dealership service not found");
         }
 
-        const localStart = getLocalDateTimeParts(startsAt, dealership.timezone);
-        const localDate = formatLocalDate(localStart);
-        if (
-          localStart.minute % 15 !== 0 ||
-          localStart.second !== 0 ||
-          startsAt.getUTCMilliseconds() !== 0
-        ) {
-          throw new BadRequestException(
-            "startsAt must align to a 15-minute increment in dealership local time",
-          );
-        }
-        const localDateParts = parseLocalDate(localDate);
-        if (!localDateParts) {
-          throw new BadRequestException("startsAt has an invalid local date");
-        }
-        const dayOfWeek = new Date(
-          Date.UTC(
-            localDateParts.year,
-            localDateParts.month - 1,
-            localDateParts.day,
-          ),
-        ).getUTCDay();
-        const endsAt = new Date(
-          startsAt.getTime() + offering.durationMinutes * 60_000,
-        );
-        const [hours] = await tx
-          .select()
-          .from(dealershipHours)
-          .where(
-            and(
-              eq(dealershipHours.dealershipId, input.dealershipId),
-              eq(dealershipHours.dayOfWeek, dayOfWeek),
-            ),
-          )
-          .limit(1);
-        if (!hours || hours.isClosed || !hours.openTime || !hours.closeTime) {
-          throw slotUnavailable("Dealership is closed on the requested date");
-        }
-        const openingInstants = resolveLocalDateTime(
-          localDate,
-          hours.openTime,
-          dealership.timezone,
-        );
-        const closingInstants = resolveLocalDateTime(
-          localDate,
-          hours.closeTime,
-          dealership.timezone,
-        );
-        if (
-          openingInstants.length === 0 ||
-          closingInstants.length === 0 ||
-          startsAt < openingInstants[0] ||
-          endsAt > closingInstants[closingInstants.length - 1]
-        ) {
-          throw slotUnavailable(
-            "Requested interval is outside dealership hours",
-          );
-        }
-
-        const overlappingClosures = await tx
-          .select({ id: dealershipClosures.id })
-          .from(dealershipClosures)
-          .where(
-            and(
-              eq(dealershipClosures.dealershipId, input.dealershipId),
-              lt(dealershipClosures.startsAt, endsAt),
-              gt(dealershipClosures.endsAt, startsAt),
-            ),
-          );
-        const activeTechnicians = await tx
-          .select()
-          .from(technicians)
-          .where(
-            and(
-              eq(technicians.dealershipId, input.dealershipId),
-              eq(technicians.isActive, true),
-            ),
-          );
-        const activeBays = await tx
-          .select()
-          .from(serviceBays)
-          .where(
-            and(
-              eq(serviceBays.dealershipId, input.dealershipId),
-              eq(serviceBays.isActive, true),
-            ),
-          );
-        const existingAppointments = await tx
-          .select({
-            assignedTechnicianId: appointments.assignedTechnicianId,
-            assignedBayId: appointments.assignedBayId,
-            startsAt: appointments.startsAt,
-            endsAt: appointments.endsAt,
-          })
-          .from(appointments)
-          .where(
-            and(
-              eq(appointments.dealershipId, input.dealershipId),
-              eq(appointments.status, "confirmed"),
-              lt(appointments.startsAt, endsAt),
-              gt(appointments.endsAt, startsAt),
-            ),
-          );
-        if (overlappingClosures.length > 0) {
-          throw slotUnavailable("A dealership closure overlaps this interval");
-        }
-
-        const technicianIds = activeTechnicians.map(({ id }) => id);
-        const bayIds = activeBays.map(({ id }) => id);
-        const qualifications =
-          technicianIds.length > 0
-            ? await tx
-                .select()
-                .from(technicianQualifications)
-                .where(
-                  and(
-                    inArray(
-                      technicianQualifications.technicianId,
-                      technicianIds,
-                    ),
-                    eq(
-                      technicianQualifications.serviceTypeId,
-                      input.serviceTypeId,
-                    ),
-                  ),
-                )
-            : [];
-        const shifts =
-          technicianIds.length > 0
-            ? await tx
-                .select()
-                .from(technicianShifts)
-                .where(
-                  and(
-                    inArray(technicianShifts.technicianId, technicianIds),
-                    eq(technicianShifts.dayOfWeek, dayOfWeek),
-                    eq(technicianShifts.isActive, true),
-                  ),
-                )
-            : [];
-        const leaves =
-          technicianIds.length > 0
-            ? await tx
-                .select()
-                .from(technicianLeaves)
-                .where(
-                  and(
-                    inArray(technicianLeaves.technicianId, technicianIds),
-                    lt(technicianLeaves.startsAt, endsAt),
-                    gt(technicianLeaves.endsAt, startsAt),
-                  ),
-                )
-            : [];
-        const capabilities =
-          bayIds.length > 0
-            ? await tx
-                .select()
-                .from(bayServiceCapabilities)
-                .where(
-                  and(
-                    inArray(bayServiceCapabilities.bayId, bayIds),
-                    eq(
-                      bayServiceCapabilities.serviceTypeId,
-                      input.serviceTypeId,
-                    ),
-                  ),
-                )
-            : [];
-
-        const shiftWindows = shifts.flatMap((shift) => {
-          const shiftStarts = resolveLocalDateTime(
-            localDate,
-            shift.startLocalTime,
-            dealership.timezone,
-          );
-          const shiftEnds = resolveLocalDateTime(
-            localDate,
-            shift.endLocalTime,
-            dealership.timezone,
-          );
-          if (shiftStarts.length === 0 || shiftEnds.length === 0) {
-            return [];
-          }
-          return [
-            {
-              technicianId: shift.technicianId,
-              startsAt: shiftStarts[0],
-              endsAt: shiftEnds[shiftEnds.length - 1],
-            },
-          ];
+        const allocation = await allocateAppointmentResources(tx, {
+          dealershipId: input.dealershipId,
+          timezone: dealership.timezone,
+          serviceTypeId: input.serviceTypeId,
+          startsAt,
+          durationMinutes: offering.durationMinutes,
         });
-
-        const assignedTechnician = activeTechnicians
-          .filter((technician) => {
-            const qualification = qualifications.find(
-              (item) => item.technicianId === technician.id,
-            );
-            if (
-              !qualification ||
-              (qualification.validFrom && qualification.validFrom > startsAt) ||
-              (qualification.validTo && qualification.validTo < endsAt)
-            ) {
-              return false;
-            }
-            const fitsShift = shiftWindows.some(
-              (shift) =>
-                shift.technicianId === technician.id &&
-                startsAt >= shift.startsAt &&
-                endsAt <= shift.endsAt,
-            );
-            const onLeave = leaves.some(
-              (leave) =>
-                leave.technicianId === technician.id &&
-                leave.startsAt < endsAt &&
-                leave.endsAt > startsAt,
-            );
-            const hasAppointment = existingAppointments.some(
-              (appointment) =>
-                appointment.assignedTechnicianId === technician.id,
-            );
-            return fitsShift && !onLeave && !hasAppointment;
-          })
-          .sort((left, right) => left.id.localeCompare(right.id))[0];
-        const assignedBay = activeBays
-          .filter((bay) => {
-            const compatible = capabilities.some(
-              (capability) => capability.bayId === bay.id,
-            );
-            const hasAppointment = existingAppointments.some(
-              (appointment) => appointment.assignedBayId === bay.id,
-            );
-            return compatible && !hasAppointment;
-          })
-          .sort((left, right) => left.id.localeCompare(right.id))[0];
-        if (!assignedTechnician) {
-          throw slotUnavailable(
-            `No qualified technician is available for this interval (active=${activeTechnicians.length}, qualifications=${qualifications.length}, shifts=${shiftWindows.length}, leave=${leaves.length}, overlapping appointments=${existingAppointments.length})`,
-          );
-        }
-        if (!assignedBay) {
-          throw slotUnavailable(
-            "No compatible service bay is available for this interval",
-          );
-        }
 
         const [created] = await tx
           .insert(appointments)
@@ -540,13 +682,13 @@ export class AppointmentsService {
             vehicleId: input.vehicleId,
             dealershipId: input.dealershipId,
             serviceTypeId: input.serviceTypeId,
-            assignedTechnicianId: assignedTechnician.id,
-            assignedBayId: assignedBay.id,
+            assignedTechnicianId: allocation.technicianId,
+            assignedBayId: allocation.bayId,
             createdByUserId: auth.userId,
             bookingChannel,
             status: "confirmed",
             startsAt,
-            endsAt,
+            endsAt: allocation.endsAt,
             serviceNameSnapshot: offering.serviceName,
             durationMinutesSnapshot: offering.durationMinutes,
           })

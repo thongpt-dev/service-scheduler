@@ -11,9 +11,9 @@ import { resolve } from "node:path";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import * as schema from "../src/database/schema";
-import { AuthService } from "../src/auth/auth.service";
-import { verifyPassword } from "../src/auth/security.util";
+import * as schema from "../../src/database/schema";
+import { AuthService } from "../../src/auth/auth.service";
+import { verifyPassword } from "../../src/auth/security.util";
 
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) {
@@ -60,7 +60,7 @@ async function run(): Promise<void> {
   );
 
   try {
-    const workspaceRoot = resolve(__dirname, "..");
+    const workspaceRoot = resolve(__dirname, "../..");
     const ownerEmail = "sample.owner@example.test";
     const ownerPassword = "LocalOwnerPass123!";
     const staffEmail = "sample.staff@example.test";

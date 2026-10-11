@@ -44,7 +44,8 @@ flowchart LR
 2. The API returns candidate start times, not a reservation.
 3. On confirmation, the API revalidates the request, derives duration, and allocates a technician and bay in a short transaction. PostgreSQL exclusion constraints apply to `confirmed` appointments only, preventing overlapping reservations; cancelled, completed, and no-show appointments do not reserve capacity. A race returns `409 SLOT_UNAVAILABLE`.
 4. Booking idempotency records are scoped by authenticated actor and operation and store the request hash and resulting appointment for 24 hours. Matching retries return the original result; reusing a key for a different request returns `409`.
-5. Cancellation preserves appointment history and releases capacity. Rescheduling updates the appointment only if the replacement interval can be secured atomically; otherwise the original remains unchanged.
+5. Customers can cancel or reschedule their own confirmed appointments until the scheduled start; active dealership members can do so for appointments in their dealership. Rescheduling revalidates the existing customer/vehicle access and scheduling rules, then updates the same appointment and resource assignments atomically. The booked service/duration snapshot is retained; a failed attempt leaves the current appointment untouched.
+6. Dealership members can mark confirmed appointments `no_show` after the scheduled start or `completed` after the scheduled end. Those transitions and cancellation release capacity. Each lifecycle action writes an append-only audit event in the same transaction with actor/appointment IDs, action, status, and prior/new schedule/resource identifiers only; customer contact details, VINs, and request snapshots are excluded.
 
 ### Staff configuration
 

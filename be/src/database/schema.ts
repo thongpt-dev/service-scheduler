@@ -42,6 +42,13 @@ export const bookingChannelEnum = pgEnum("booking_channel", [
   "staff_assisted",
 ]);
 
+export const appointmentAuditActionEnum = pgEnum("appointment_audit_action", [
+  "cancelled",
+  "rescheduled",
+  "completed",
+  "no_show",
+]);
+
 export const users = pgTable(
   "users",
   {
@@ -617,8 +624,57 @@ export const idempotencyRecords = pgTable(
   ],
 );
 
+export const appointmentAuditEvents = pgTable(
+  "appointment_audit_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    appointmentId: uuid("appointment_id")
+      .notNull()
+      .references(() => appointments.id, { onDelete: "restrict" }),
+    actorUserId: uuid("actor_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    action: appointmentAuditActionEnum("action").notNull(),
+    previousStatus: appointmentStatusEnum("previous_status").notNull(),
+    newStatus: appointmentStatusEnum("new_status").notNull(),
+    previousStartsAt: timestamp("previous_starts_at", { withTimezone: true }),
+    newStartsAt: timestamp("new_starts_at", { withTimezone: true }),
+    previousEndsAt: timestamp("previous_ends_at", { withTimezone: true }),
+    newEndsAt: timestamp("new_ends_at", { withTimezone: true }),
+    previousTechnicianId: uuid("previous_technician_id").references(
+      () => technicians.id,
+      { onDelete: "restrict" },
+    ),
+    newTechnicianId: uuid("new_technician_id").references(
+      () => technicians.id,
+      { onDelete: "restrict" },
+    ),
+    previousBayId: uuid("previous_bay_id").references(() => serviceBays.id, {
+      onDelete: "restrict",
+    }),
+    newBayId: uuid("new_bay_id").references(() => serviceBays.id, {
+      onDelete: "restrict",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("appointment_audit_events_appointment_created_idx").on(
+      table.appointmentId,
+      table.createdAt,
+    ),
+    index("appointment_audit_events_actor_created_idx").on(
+      table.actorUserId,
+      table.createdAt,
+    ),
+  ],
+);
+
 export type DealershipMembershipRole =
   (typeof dealershipMembershipRoleEnum.enumValues)[number];
 export type AppointmentStatus =
   (typeof appointmentStatusEnum.enumValues)[number];
 export type BookingChannel = (typeof bookingChannelEnum.enumValues)[number];
+export type AppointmentAuditAction =
+  (typeof appointmentAuditActionEnum.enumValues)[number];

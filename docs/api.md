@@ -90,26 +90,27 @@ Staff provisioning:
 
 These values are illustrative only. Never use real credentials in API examples.
 
-## Appointment creation endpoints
+## Appointment endpoints
 
 | Method and path | Authentication | Purpose | Success |
 | --- | --- | --- | --- |
 | `POST /api/v1/appointments/self-service` | Customer JWT | Confirm an appointment for the customer in the token. | `201` |
 | `POST /api/v1/appointments/staff-assisted` | Owner, manager, or staff membership in the target dealership | Confirm an appointment for the specified associated customer. | `201` |
+| `GET /api/v1/appointments/me?period={period}` | Customer JWT | List the caller's upcoming or past appointments (`period` is `upcoming` or `past`); supports `status`, `limit` (1-100), and `offset`. Defaults to upcoming, limit 50, offset 0. | `200` |
+| `GET /api/v1/appointments/me/{appointmentId}` | Customer JWT | Read an appointment belonging to the caller. | `200` |
+| `GET /api/v1/dealerships/{dealershipId}/appointments?from={timestamp}&to={timestamp}` | Owner, manager, or staff membership in that dealership | Search appointment starts in the half-open `[from, to)` interval; optional `status` and `customerId` filters, plus `limit`/`offset` pagination. | `200` |
+| `GET /api/v1/dealerships/{dealershipId}/appointments/{appointmentId}` | Owner, manager, or staff membership in that dealership | Read an appointment in the dealership schedule. | `200` |
+| `POST /api/v1/appointments/{appointmentId}/cancel` | Customer who owns the appointment or any member of its dealership | Cancel a confirmed appointment that has not started. | `200` |
+| `POST /api/v1/appointments/{appointmentId}/reschedule` | Customer who owns the appointment or any member of its dealership | Revalidate and atomically move a confirmed appointment to a new start. | `200` |
+| `PATCH /api/v1/appointments/{appointmentId}/status` | Owner, manager, or staff membership in that dealership | Mark a confirmed appointment `completed` or `no_show`. | `200` |
 
 Both endpoints require an `Idempotency-Key` header (1-255 characters). Keys are scoped to the authenticated actor and appointment-create operation and retained for 24 hours. A retry with the same normalized request returns the original appointment; reusing the key for a different request returns `409 IDEMPOTENCY_KEY_REUSED`. Capacity conflicts return `409 SLOT_UNAVAILABLE`.
 
-The JSON body contains `dealershipId`, `vehicleId`, `serviceTypeId`, and a zoned `startsAt`; staff-assisted requests also contain `customerId`. Self-service customer identity comes from the JWT. The server validates explicit dealership vehicle assignment and customer ownership/shared access, derives duration from the active dealership offering, checks hours/closures and resource eligibility, and allocates both resources within one transaction. Client-provided end times, duration, technician, and bay are not accepted.
+The creation JSON body contains `dealershipId`, `vehicleId`, `serviceTypeId`, and a zoned `startsAt`; staff-assisted requests also contain `customerId`. Self-service customer identity comes from the JWT. The server validates explicit dealership vehicle assignment and customer ownership/shared access, derives duration from the active dealership offering, checks hours/closures and resource eligibility, and allocates both resources within one transaction. Client-provided end times, duration, technician, and bay are not accepted.
 
-## Planned MVP endpoint surface
+Rescheduling accepts `{ "startsAt": "2026-10-21T16:00:00.000Z" }`. It retains the original service and duration snapshots, validates the same customer/vehicle/dealership relationship, rechecks the schedule and reassigns resources in one transaction. The appointment ID and history remain; an audit event records the old/new schedule and resource IDs. A failed reschedule leaves the current appointment unchanged. Cancellation and status changes also append lifecycle audit events containing only allowlisted identifiers, action, status, schedule, and resource fields; no customer contact or vehicle data is copied into audit records.
 
-The following business endpoints are in the MVP plan but are not yet implemented. Their detailed request/response DTOs, exact resource paths where not listed, and Swagger examples must be added alongside each controller in the feature implementation step; this inventory is not evidence that those endpoints already exist.
-
-| Feature | Planned routes/capabilities | Access scope |
-| --- | --- | --- |
-| Appointments | List/read appointments; search a dealership schedule; cancel and reschedule. | Customers access their own authorized appointments; staff access only their dealership and permitted actions. |
-
-Availability results are advisory. Confirmation rechecks the full interval inside the booking transaction. On cancellation capacity is released; rescheduling changes the existing booking only when the replacement interval and both resources are secured atomically.
+Customers can cancel or reschedule their own confirmed appointments until the scheduled start; no additional notice cutoff applies. Any active dealership member may cancel or reschedule appointments in that dealership. Only dealership members may set `completed` or `no_show`, and only from `confirmed`: `no_show` requires the appointment to have started, while `completed` requires its scheduled end to have passed. Cancelled, completed, and no-show appointments remain in history and release capacity.
 
 ## Authentication and authorization contract
 
@@ -131,7 +132,7 @@ Availability results are advisory. Confirmation rechecks the full interval insid
 | `401` | Missing/invalid/expired/revoked JWT or invalid credentials. |
 | `403` | Authenticated caller lacks required role or dealership membership. |
 | `404` | Resource does not exist or is outside the caller's allowed visibility; avoid confirming protected record existence. |
-| `409` | Duplicate account conflict, unavailable booking slot, or idempotency-key reuse with a different normalized request. |
+| `409` | Duplicate account conflict, unavailable booking slot, idempotency-key reuse with a different normalized request, or invalid appointment lifecycle transition. |
 | `503` | Readiness check cannot reach PostgreSQL. |
 
 ## Endpoint implementation layout

@@ -43,6 +43,8 @@ erDiagram
 
     USERS ||--o{ IDEMPOTENCY_RECORDS : acts
     APPOINTMENTS ||--o{ IDEMPOTENCY_RECORDS : result_for
+    USERS ||--o{ APPOINTMENT_AUDIT_EVENTS : performs
+    APPOINTMENTS ||--o{ APPOINTMENT_AUDIT_EVENTS : history
 
     USERS {
         uuid id PK
@@ -204,6 +206,23 @@ erDiagram
         timestamptz created_at
         timestamptz expires_at "at most 24 hours after creation"
     }
+    APPOINTMENT_AUDIT_EVENTS {
+        uuid id PK
+        uuid appointment_id FK
+        uuid actor_user_id FK
+        enum action "cancelled, rescheduled, completed, no_show"
+        enum previous_status
+        enum new_status
+        timestamptz previous_starts_at "nullable"
+        timestamptz new_starts_at "nullable"
+        timestamptz previous_ends_at "nullable"
+        timestamptz new_ends_at "nullable"
+        uuid previous_technician_id FK "nullable"
+        uuid new_technician_id FK "nullable"
+        uuid previous_bay_id FK "nullable"
+        uuid new_bay_id FK "nullable"
+        timestamptz created_at
+    }
 ```
 
 ## Entity details
@@ -232,6 +251,7 @@ All mutable domain tables use UUID primary keys and timezone-aware `created_at` 
 | `bay_service_capabilities` | Composite bay/service key declaring which work that bay can support. The database requires a matching capability when a bay is assigned to an appointment. |
 | `appointments` | Confirmed or historical service booking. Stores customer, vehicle, dealership, service, assigned technician and bay, authenticated creator, booking channel, status, start/end instants, and service name/duration snapshots. Reference is unique. Start must precede end, and the interval must equal the positive duration snapshot. |
 | `idempotency_records` | Retry record for an authenticated operation, linked to its actor and resulting appointment. Its purpose and column rationale are described below. |
+| `appointment_audit_events` | Append-only lifecycle events for cancellation, rescheduling, completion, and no-show. Stores actor/appointment IDs, action, prior/new status, and optional prior/new schedule and resource IDs; deliberately excludes customer contact details, vehicle IDs, VINs, and unstructured snapshots. |
 
 ## Appointment integrity and capacity
 
@@ -246,6 +266,8 @@ These relational checks do not determine whether entities are active or whether 
 Dealership vehicle visibility is separate from customer/dealership association and customer/vehicle sharing. A dealership can see a vehicle only when a `dealership_vehicles` row assigns it there; for a particular dealership customer, the vehicle must also be owned by or explicitly shared with that customer. Existing customer/dealership links are not automatically backfilled into `dealership_vehicles`, because that could expose every vehicle belonging to those customers. Vehicles must be assigned through customer opt-in or staff-assisted intake.
 
 Appointment instants, closures, leave, and qualification validity are `timestamptz` values stored as instants. Weekly opening hours and technician shifts are `time` values interpreted in the dealership's IANA timezone. Intervals use half-open `[start, end)` semantics: an appointment ending at 10:00 does not overlap one starting at 10:00.
+
+Cancellation and rescheduling are allowed for customers on their own confirmed appointments and for any active member of the appointment's dealership, but only before the scheduled start. Rescheduling updates the existing appointment in place after revalidating eligibility and securing both resources in the same transaction; it preserves the original service/duration snapshot. The audit event stores the prior and new schedule/resource assignments. A failed reschedule rolls back the appointment update and audit insert. Dealership members may mark a confirmed appointment `no_show` after its start or `completed` after its end. Both transitions release capacity because only confirmed appointments participate in exclusion constraints.
 
 PostgreSQL GiST exclusion constraints use `btree_gist` and `tstzrange(starts_at, ends_at, '[)')` to prevent overlap on each assigned technician and bay. The constraints apply only to `confirmed` appointments. `cancelled`, `completed`, and `no_show` records remain in history but do not reserve future capacity. Availability calculations and the database predicate must keep this same status rule.
 
@@ -288,6 +310,7 @@ Expiry defines the maximum replay window; it does not itself remove a row. Becau
 - `btree_gist`: allows UUID equality operators in the GiST resource/time exclusion constraints.
 - `dealership_membership_role`: `owner`, `manager`, `staff`.
 - `appointment_status`: `confirmed`, `cancelled`, `completed`, `no_show`.
+- `appointment_audit_action`: `cancelled`, `rescheduled`, `completed`, `no_show`.
 - `booking_channel`: `customer_self_service`, `staff_assisted`.
 
 The database schema intentionally does not include email verification codes, external identity-provider sessions, or audit-log tables in this MVP schema. Authentication verification delivery and the separately reviewed audit design remain outside this data-model migration.

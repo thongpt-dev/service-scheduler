@@ -10,22 +10,22 @@ import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { AvailabilityService } from "../src/availability/availability.service";
-import { AppointmentsService } from "../src/appointments/appointments.service";
+import { AvailabilityService } from "../../src/availability/availability.service";
+import { AppointmentsService } from "../../src/appointments/appointments.service";
 import {
   addCalendarDays,
   formatLocalDate,
   getLocalDateTimeParts,
   parseLocalDate,
-} from "../src/availability/timezone.util";
-import { AuthService } from "../src/auth/auth.service";
-import * as schema from "../src/database/schema";
-import { CustomersService } from "../src/customers/customers.service";
-import { DealershipsService } from "../src/dealerships/dealerships.service";
-import { ServiceCatalogService } from "../src/service-catalog/service-catalog.service";
-import { ServiceBaysService } from "../src/service-bays/service-bays.service";
-import { TechniciansService } from "../src/technicians/technicians.service";
-import { VehiclesService } from "../src/vehicles/vehicles.service";
+} from "../../src/availability/timezone.util";
+import { AuthService } from "../../src/auth/auth.service";
+import * as schema from "../../src/database/schema";
+import { CustomersService } from "../../src/customers/customers.service";
+import { DealershipsService } from "../../src/dealerships/dealerships.service";
+import { ServiceCatalogService } from "../../src/service-catalog/service-catalog.service";
+import { ServiceBaysService } from "../../src/service-bays/service-bays.service";
+import { TechniciansService } from "../../src/technicians/technicians.service";
+import { VehiclesService } from "../../src/vehicles/vehicles.service";
 
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) {
@@ -102,7 +102,7 @@ async function run(): Promise<void> {
 
   try {
     execFileSync("npm", ["run", "db:seed"], {
-      cwd: resolve(__dirname, ".."),
+      cwd: resolve(__dirname, "../.."),
       env: {
         ...process.env,
         DATABASE_URL: databaseUrl,
@@ -124,6 +124,13 @@ async function run(): Promise<void> {
     });
     const staffAuth = await authService.authenticateBearerToken(
       staffToken.accessToken,
+    );
+    const managerToken = await authService.staffLogin({
+      email: "sample.manager@example.test",
+      password: "LocalManagerPass123!",
+    });
+    const managerAuth = await authService.authenticateBearerToken(
+      managerToken.accessToken,
     );
     const customerToken = await authService.customerLogin({
       email: "sample.customer@example.test",
@@ -557,6 +564,120 @@ async function run(): Promise<void> {
       `Only one competing request can confirm the same technician/bay interval; succeeded=${successfulCompetitors.length}, failures=${competingFailureMessages.join(" | ")}`,
     );
 
+    const customerAppointments =
+      await appointmentsService.listCustomerAppointments(customerAuth, {
+        period: "upcoming",
+        limit: 50,
+        offset: 0,
+      });
+    assert(
+      customerAppointments.items.some(
+        ({ id }) => id === selfBooking.appointment.id,
+      ),
+      "Customers can list their own upcoming appointments",
+    );
+    const staffAppointments =
+      await appointmentsService.listDealershipAppointments(
+        staffAuth,
+        sampleDealershipId,
+        {
+          from: new Date(
+            selfBooking.appointment.startsAt.getTime() - 60_000,
+          ).toISOString(),
+          to: new Date(
+            selfBooking.appointment.endsAt.getTime() + 60_000,
+          ).toISOString(),
+          limit: 50,
+          offset: 0,
+        },
+      );
+    assert(
+      staffAppointments.items.some(
+        ({ id }) => id === selfBooking.appointment.id,
+      ),
+      "Dealership staff can search their schedule in a bounded interval",
+    );
+    await expectError(
+      () =>
+        appointmentsService.getDealershipAppointment(
+          managerAuth,
+          sampleDealershipId,
+          selfBooking.appointment.id,
+        ),
+      ForbiddenException,
+      "A manager from another dealership cannot read this appointment",
+    );
+    await expectError(
+      () =>
+        appointmentsService.updateAppointmentStatus(
+          staffAuth,
+          selfBooking.appointment.id,
+          "completed",
+        ),
+      ConflictException,
+      "A future appointment cannot be marked completed",
+    );
+
+    const freshAvailability = await availabilityService.getAvailability(
+      customerAuth,
+      {
+        dealershipId: sampleDealershipId,
+        vehicleId: sampleVehicleId,
+        serviceTypeId: sampleServiceTypeId,
+        date: availabilityDate,
+      },
+    );
+    const rescheduleSlot = freshAvailability.slots.at(-1);
+    assert(rescheduleSlot !== undefined, "Expected a free reschedule slot");
+    const rescheduled = await appointmentsService.rescheduleAppointment(
+      customerAuth,
+      selfBooking.appointment.id,
+      { startsAt: rescheduleSlot.startsAt },
+    );
+    assert(
+      rescheduled.startsAt.toISOString() === rescheduleSlot.startsAt &&
+        rescheduled.durationMinutesSnapshot ===
+          selfBooking.appointment.durationMinutesSnapshot,
+      "Rescheduling retains the booked duration and updates the slot",
+    );
+    await expectError(
+      () =>
+        appointmentsService.rescheduleAppointment(
+          customerAuth,
+          selfBooking.appointment.id,
+          { startsAt: competingSlot.startsAt },
+        ),
+      ConflictException,
+      "A failed reschedule into an occupied slot must conflict",
+    );
+    const unchangedAppointment =
+      await appointmentsService.getCustomerAppointment(
+        customerAuth,
+        selfBooking.appointment.id,
+      );
+    assert(
+      unchangedAppointment.startsAt.toISOString() ===
+        rescheduled.startsAt.toISOString(),
+      "A failed reschedule preserves the original schedule",
+    );
+    const cancelledAppointment = await appointmentsService.cancelAppointment(
+      customerAuth,
+      selfBooking.appointment.id,
+    );
+    assert(
+      cancelledAppointment.status === "cancelled",
+      "Customers can cancel their own future confirmed appointments",
+    );
+    const lifecycleAudit = await pool.query<{ action: string }>(
+      "SELECT action FROM appointment_audit_events WHERE appointment_id = $1 ORDER BY created_at",
+      [selfBooking.appointment.id],
+    );
+    assert(
+      lifecycleAudit.rows.map(({ action }) => action).join(",") ===
+        "rescheduled,cancelled",
+      "Rescheduling and cancellation append ordered audit events",
+    );
+
     const mountainDealershipId = "11111111-1111-4111-8111-111111111112";
     const mountainCustomerId = "55555555-5555-4555-8555-555555555556";
     const mountainVehicleId = "66666666-6666-4666-8666-666666666667";
@@ -594,6 +715,81 @@ async function run(): Promise<void> {
         assistedBooking.appointment.bookingChannel === "staff_assisted" &&
         assistedBooking.appointment.durationMinutesSnapshot === 75,
       "Staff-assisted booking uses the selected associated customer and dealership duration",
+    );
+
+    const historicalAppointments = await Promise.all(
+      ["2020-01-06T17:00:00.000Z", "2020-01-07T17:00:00.000Z"].map(
+        async (startsAtString) => {
+          const startsAt = new Date(startsAtString);
+          const [appointment] = await db
+            .insert(schema.appointments)
+            .values({
+              appointmentRef: `APPT-${randomUUID().replaceAll("-", "").slice(0, 24).toUpperCase()}`,
+              customerId: sampleCustomer.id,
+              vehicleId: sampleVehicleId,
+              dealershipId: sampleDealershipId,
+              serviceTypeId: sampleServiceTypeId,
+              assignedTechnicianId: "33333333-3333-4333-8333-333333333333",
+              assignedBayId: "44444444-4444-4444-8444-444444444444",
+              createdByUserId: ownerAuth.userId,
+              bookingChannel: "customer_self_service",
+              status: "confirmed",
+              startsAt,
+              endsAt: new Date(startsAt.getTime() + 60 * 60_000),
+              serviceNameSnapshot: "Standard Service",
+              durationMinutesSnapshot: 60,
+            })
+            .returning();
+          assert(
+            appointment !== undefined,
+            "Historical appointment is created",
+          );
+          return appointment;
+        },
+      ),
+    );
+    await expectError(
+      () =>
+        appointmentsService.updateAppointmentStatus(
+          customerAuth,
+          historicalAppointments[0].id,
+          "completed",
+        ),
+      NotFoundException,
+      "Customers cannot mark appointments completed or no-show",
+    );
+    const completedAppointment =
+      await appointmentsService.updateAppointmentStatus(
+        staffAuth,
+        historicalAppointments[0].id,
+        "completed",
+      );
+    const noShowAppointment = await appointmentsService.updateAppointmentStatus(
+      staffAuth,
+      historicalAppointments[1].id,
+      "no_show",
+    );
+    assert(
+      completedAppointment.status === "completed" &&
+        noShowAppointment.status === "no_show",
+      "Dealership staff can mark elapsed appointments completed or no-show",
+    );
+    const statusAudit = await pool.query<{ count: string }>(
+      "SELECT count(*) FROM appointment_audit_events WHERE appointment_id = ANY($1::uuid[]) AND action IN ('completed', 'no_show')",
+      [[historicalAppointments[0].id, historicalAppointments[1].id]],
+    );
+    assert(
+      statusAudit.rows[0].count === "2",
+      "Staff status changes append lifecycle audit events",
+    );
+    const pastAppointments = await appointmentsService.listCustomerAppointments(
+      customerAuth,
+      { period: "past", limit: 50, offset: 0 },
+    );
+    assert(
+      pastAppointments.items.some(({ id }) => id === completedAppointment.id) &&
+        pastAppointments.items.some(({ id }) => id === noShowAppointment.id),
+      "Customer past history includes terminal appointment records",
     );
 
     await expectError(

@@ -63,7 +63,7 @@ async function expectPostgresError(
 }
 
 async function seed(pool: Pool, databaseUrl: string): Promise<void> {
-  const workspaceRoot = resolve(__dirname, "..");
+  const workspaceRoot = resolve(__dirname, "../..");
   execFileSync("npm", ["run", "db:seed"], {
     cwd: workspaceRoot,
     env: {
@@ -224,7 +224,7 @@ async function run(): Promise<void> {
     const tableResult = await pool.query<{ count: string }>(
       "SELECT count(*) FROM pg_tables WHERE schemaname = 'public'",
     );
-    assert(tableResult.rows[0].count === "20", "Expected 20 MVP tables");
+    assert(tableResult.rows[0].count === "21", "Expected 21 MVP tables");
 
     await seed(pool, testDatabaseUrl);
     await seed(pool, testDatabaseUrl);
