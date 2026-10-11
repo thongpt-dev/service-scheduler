@@ -46,7 +46,37 @@ export class CustomerVehiclesControllerV1 {
   @ApiOperation({
     summary: "List vehicles owned by or shared with the customer",
   })
-  @ApiOkResponse({ description: "Authorized customer vehicles returned." })
+  @ApiOkResponse({
+    description:
+      "Owned or shared vehicles and all dealership assignments for each vehicle returned.",
+    schema: {
+      example: [
+        {
+          id: "66666666-6666-4666-8666-666666666666",
+          ownerCustomerId: "55555555-5555-4555-8555-555555555555",
+          vin: "SAMPLE12345678901",
+          make: "Example Motors",
+          model: "Development Vehicle",
+          year: 2022,
+          isActive: true,
+          dealershipAssignments: [
+            {
+              dealershipId: "11111111-1111-4111-8111-111111111111",
+              dealershipName: "Sample Service Center",
+              dealershipCity: "Springfield",
+              isDealershipActive: true,
+            },
+            {
+              dealershipId: "11111111-1111-4111-8111-111111111112",
+              dealershipName: "Mountain View Auto Care",
+              dealershipCity: "Boulder",
+              isDealershipActive: true,
+            },
+          ],
+        },
+      ],
+    },
+  })
   @ApiForbiddenResponse({ description: "Customer profile is required." })
   @ApiUnauthorizedResponse({ description: "Missing or invalid bearer token." })
   list(@CurrentAuth() auth: AuthContext) {

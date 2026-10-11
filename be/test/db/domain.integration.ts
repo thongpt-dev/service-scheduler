@@ -8,6 +8,7 @@ import { ConfigService } from "@nestjs/config";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
+import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { AvailabilityService } from "../../src/availability/availability.service";
@@ -141,12 +142,58 @@ async function run(): Promise<void> {
     );
     const sampleCustomer = customerAuth.customer;
     assert(sampleCustomer !== null, "Seeded customer must have a profile");
+    const customerVehicles = await vehiclesService.listMyVehicles(customerAuth);
+    const ownedVehicle = customerVehicles.find(
+      (vehicle) => vehicle.id === "66666666-6666-4666-8666-666666666666",
+    );
+    const unassignedVehicle = customerVehicles.find(
+      (vehicle) => vehicle.id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    );
     assert(
-      (await vehiclesService.listMyVehicles(customerAuth)).some(
-        (vehicle) => vehicle.id === "66666666-6666-4666-8666-666666666666",
-      ),
+      ownedVehicle?.dealershipAssignments.some(
+        ({ dealershipId }) =>
+          dealershipId === "11111111-1111-4111-8111-111111111111",
+      ) === true,
       "Customer vehicle endpoint service must include the seeded owned vehicle",
     );
+    assert(
+      unassignedVehicle?.dealershipAssignments.length === 0,
+      "Customer vehicle endpoint identifies vehicles that are not assigned to a dealership",
+    );
+    const relationTestVehicleId = randomUUID();
+    await db.insert(schema.vehicles).values({
+      id: relationTestVehicleId,
+      ownerCustomerId: sampleCustomer.id,
+      vin: `TEST${randomUUID().replaceAll("-", "").slice(0, 13)}`,
+      make: "Integration",
+      model: "Many-to-many fixture",
+      year: 2025,
+    });
+    await db.insert(schema.dealershipVehicles).values([
+      {
+        vehicleId: relationTestVehicleId,
+        dealershipId: "11111111-1111-4111-8111-111111111111",
+        assignedByUserId: customerAuth.userId,
+      },
+      {
+        vehicleId: relationTestVehicleId,
+        dealershipId: "11111111-1111-4111-8111-111111111112",
+        assignedByUserId: customerAuth.userId,
+      },
+    ]);
+    const multiplyAssignedVehicle = (
+      await vehiclesService.listMyVehicles(customerAuth)
+    ).find((vehicle) => vehicle.id === relationTestVehicleId);
+    assert(
+      multiplyAssignedVehicle?.dealershipAssignments.length === 2,
+      "Customer vehicle endpoint returns all dealership assignments for a vehicle",
+    );
+    await db
+      .delete(schema.dealershipVehicles)
+      .where(eq(schema.dealershipVehicles.vehicleId, relationTestVehicleId));
+    await db
+      .delete(schema.vehicles)
+      .where(eq(schema.vehicles.id, relationTestVehicleId));
     const sampleDealershipId = "11111111-1111-4111-8111-111111111111";
     const sampleVehicleId = "66666666-6666-4666-8666-666666666666";
     const sampleServiceTypeId = "22222222-2222-4222-8222-222222222222";

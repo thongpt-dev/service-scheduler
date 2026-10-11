@@ -10,6 +10,7 @@ import {
 } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import type { AppModule as AppModuleDefinition } from "../../src/app.module";
+import { ApiExceptionFilter } from "../../src/system/api-exception.filter";
 
 const seeded = {
   dealershipId: "11111111-1111-4111-8111-111111111111",
@@ -137,6 +138,11 @@ function readAppointment(value: unknown, label: string): Appointment {
 function readToken(value: unknown, label: string): string {
   assertRecord(value, label);
   return readString(value, "accessToken", label);
+}
+
+function readErrorCode(result: HttpResult, label: string): string {
+  assertRecord(result.body, label);
+  return readString(result.body, "code", label);
 }
 
 function errorSummary(body: unknown): string {
@@ -342,6 +348,7 @@ async function run(): Promise<void> {
         forbidNonWhitelisted: true,
       }),
     );
+    app.useGlobalFilters(new ApiExceptionFilter());
     await app.listen(0, "127.0.0.1");
     baseUrl = await app.getUrl();
 
@@ -372,6 +379,10 @@ async function run(): Promise<void> {
       unauthorizedList,
       401,
       "Unauthenticated customer appointment list",
+    );
+    assert.equal(
+      readErrorCode(unauthorizedList, "unauthorized response"),
+      "UNAUTHORIZED",
     );
 
     logStep("Find a customer slot, book it, and verify idempotency behavior");
@@ -445,6 +456,10 @@ async function run(): Promise<void> {
       },
     );
     expectStatus(mismatchedReplay, 409, "Idempotency key request mismatch");
+    assert.equal(
+      readErrorCode(mismatchedReplay, "idempotency conflict"),
+      "IDEMPOTENCY_KEY_REUSED",
+    );
 
     logStep(
       "Read the booking as the customer and search it in the staff schedule",
@@ -544,6 +559,14 @@ async function run(): Promise<void> {
       [201, 409],
       "Exactly one concurrent request should confirm a shared resource interval",
     );
+    const competingConflict = competingResults.find(
+      ({ status }) => status === 409,
+    );
+    assert.ok(competingConflict, "One competing request should conflict");
+    assert.equal(
+      readErrorCode(competingConflict, "capacity conflict"),
+      "SLOT_UNAVAILABLE",
+    );
     const competingSuccess = competingResults.find(
       ({ status }) => status === 201,
     );
@@ -596,6 +619,10 @@ async function run(): Promise<void> {
       },
     );
     expectStatus(failedReschedule, 409, "Reschedule into an occupied interval");
+    assert.equal(
+      readErrorCode(failedReschedule, "reschedule conflict"),
+      "SLOT_UNAVAILABLE",
+    );
     const appointmentAfterFailedReschedule = await request(
       baseUrl,
       "GET",
@@ -623,6 +650,10 @@ async function run(): Promise<void> {
       { accessToken: staffToken, body: { status: "completed" } },
     );
     expectStatus(futureCompletion, 409, "Completion before scheduled end");
+    assert.equal(
+      readErrorCode(futureCompletion, "future completion conflict"),
+      "APPOINTMENT_NOT_READY_FOR_STATUS",
+    );
     const futureNoShow = await request(
       baseUrl,
       "PATCH",
@@ -630,6 +661,10 @@ async function run(): Promise<void> {
       { accessToken: staffToken, body: { status: "no_show" } },
     );
     expectStatus(futureNoShow, 409, "No-show before scheduled start");
+    assert.equal(
+      readErrorCode(futureNoShow, "future no-show conflict"),
+      "APPOINTMENT_NOT_READY_FOR_STATUS",
+    );
 
     logStep("Cancel the customer's appointment and release its capacity");
     const cancellation = await request(
@@ -703,7 +738,6 @@ async function run(): Promise<void> {
       ),
       1,
     );
-
   } finally {
     if (baseUrl) {
       for (const appointment of createdAppointments) {

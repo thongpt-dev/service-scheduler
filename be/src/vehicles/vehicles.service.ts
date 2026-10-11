@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { and, eq, or } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import type { AuthContext } from "../auth/auth.types";
 import { InjectDb, type Database } from "../database/database.types";
 import {
@@ -37,7 +37,7 @@ export class VehiclesService {
     if (!auth.customer) {
       throw new ForbiddenException("Customer profile is required");
     }
-    return this.db
+    const customerVehicles = await this.db
       .selectDistinct({
         id: vehicles.id,
         ownerCustomerId: vehicles.ownerCustomerId,
@@ -61,6 +61,44 @@ export class VehiclesService {
           ),
         ),
       );
+    if (customerVehicles.length === 0) {
+      return [];
+    }
+
+    const assignments = await this.db
+      .select({
+        vehicleId: dealershipVehicles.vehicleId,
+        dealershipId: dealerships.id,
+        dealershipName: dealerships.name,
+        dealershipCity: dealerships.city,
+        isDealershipActive: dealerships.isActive,
+      })
+      .from(dealershipVehicles)
+      .innerJoin(
+        dealerships,
+        eq(dealerships.id, dealershipVehicles.dealershipId),
+      )
+      .where(
+        inArray(
+          dealershipVehicles.vehicleId,
+          customerVehicles.map(({ id }) => id),
+        ),
+      );
+    const assignmentsByVehicle = new Map<
+      string,
+      (typeof assignments)[number][]
+    >();
+    for (const assignment of assignments) {
+      const vehicleAssignments =
+        assignmentsByVehicle.get(assignment.vehicleId) ?? [];
+      vehicleAssignments.push(assignment);
+      assignmentsByVehicle.set(assignment.vehicleId, vehicleAssignments);
+    }
+
+    return customerVehicles.map((vehicle) => ({
+      ...vehicle,
+      dealershipAssignments: assignmentsByVehicle.get(vehicle.id) ?? [],
+    }));
   }
 
   async assignOwnedVehicleToDealership(

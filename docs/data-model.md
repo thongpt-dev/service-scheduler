@@ -253,6 +253,8 @@ All mutable domain tables use UUID primary keys and timezone-aware `created_at` 
 | `idempotency_records` | Retry record for an authenticated operation, linked to its actor and resulting appointment. Its purpose and column rationale are described below. |
 | `appointment_audit_events` | Append-only lifecycle events for cancellation, rescheduling, completion, and no-show. Stores actor/appointment IDs, action, prior/new status, and optional prior/new schedule and resource IDs; deliberately excludes customer contact details, vehicle IDs, VINs, and unstructured snapshots. |
 
+Lifecycle audit events are retained for the lifetime of the associated appointment history. The MVP does not run an automatic purge; do not add one until a legal/product retention period is approved. Because appointment history is preserved, audit events are also preserved by default.
+
 ## Appointment integrity and capacity
 
 Appointment foreign keys use `ON DELETE RESTRICT` to preserve history. Composite foreign keys additionally enforce that:

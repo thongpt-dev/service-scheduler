@@ -1,0 +1,11 @@
+node_modules
+.nest
+dist
+coverage
+*.tsbuildinfo
+npm-debug.log*
+.git
+.github
+.env
+.env.*
+test

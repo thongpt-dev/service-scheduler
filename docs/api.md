@@ -30,7 +30,7 @@ This document is the API contract reference for the backend MVP. The product sco
 | `PATCH /api/v1/customers/me` | Customer JWT | Update the caller's name and phone. Email changes are not supported through this route. | `200` |
 | `GET /api/v1/customers/me/dealerships` | Customer JWT | List active dealerships associated with the caller's customer profile. | `200` |
 | `PUT /api/v1/customers/me/dealerships/{dealershipId}` | Customer JWT | Opt in to associate the caller's customer profile with an active dealership; safe to repeat. The customer ID is derived from the authenticated token. | `200` |
-| `GET /api/v1/customers/me/vehicles` | Customer JWT | List active vehicles owned by or explicitly shared with the caller. | `200` |
+| `GET /api/v1/customers/me/vehicles` | Customer JWT | List active vehicles owned by or explicitly shared with the caller, including every dealership assignment for each vehicle. Assignments are many-to-many; an empty list means the vehicle is not assigned to a dealership. | `200` |
 | `PUT /api/v1/customers/me/vehicles/{vehicleId}/dealerships/{dealershipId}` | Vehicle-owner customer JWT | Assign an owned vehicle to an active dealership. The customer ID is derived from the token; customer/dealership association and vehicle assignment are created atomically. | `200` |
 | `GET /api/v1/dealerships` | Customer or staff JWT | List active dealerships. | `200` |
 | `GET /api/v1/dealerships/{dealershipId}` | Customer or staff JWT | Read an active dealership. | `200` |
@@ -125,6 +125,8 @@ Customers can cancel or reschedule their own confirmed appointments until the sc
 - `POST /api/v1/auth/tokens/revoke-all` increments `token_version`; requests using tokens with the prior version are rejected.
 
 ## Error conventions
+
+Error responses use a stable JSON envelope: `statusCode`, `code`, `message`, and `timestamp`. Standard NestJS errors use status-derived codes such as `BAD_REQUEST`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, and `SERVICE_UNAVAILABLE`; domain conflicts preserve codes such as `SLOT_UNAVAILABLE`, `IDEMPOTENCY_KEY_REUSED`, and `APPOINTMENT_NOT_READY_FOR_STATUS`. Unexpected server errors return `INTERNAL_SERVER_ERROR` with a generic message; implementation details are not included.
 
 | Status | Use |
 | --- | --- |

@@ -4,11 +4,13 @@ import { NestFactory } from "@nestjs/core";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import type { NextFunction, Request, Response } from "express";
 import { AppModule } from "./app.module";
+import { ApiExceptionFilter } from "./system/api-exception.filter";
 
 const requestLogger = new Logger("HttpRequest");
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.useGlobalFilters(new ApiExceptionFilter());
   app.setGlobalPrefix("api");
   app.enableVersioning({
     type: VersioningType.URI,

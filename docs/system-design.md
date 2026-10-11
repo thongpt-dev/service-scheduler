@@ -69,9 +69,27 @@ Appointments link customers, vehicles, dealerships, services, technicians, and b
 
 ## Observability strategy
 
-- **MVP application baseline:** Provide liveness/readiness checks and allowlisted HTTP request logs containing method, status code, and duration. Add booking outcome events when booking endpoints are implemented. Exclude credentials, request bodies, customer contact details, VINs, and other personal data.
+- **MVP application baseline:** Provide liveness/readiness checks and allowlisted HTTP request logs containing method, status code, and duration. Booking outcome events record only booking channel, outcome (`confirmed`, `replayed`, or `rejected`), stable failure code when applicable, and duration. Exclude credentials, request bodies, customer contact details, VINs, appointment/customer/vehicle IDs, and other personal data.
 - **Production application instrumentation:** Add metrics and distributed traces after booking and availability flows exist and a telemetry backend is selected. Telemetry export must not block requests or expose customer/vehicle data.
 - **Deployment/operations:** Configure telemetry storage, retention/access, dashboards, alert thresholds, and notification routing with the production hosting environment and operational owner. These are not created automatically by backend logging or metric instrumentation.
+
+### Backup and recovery
+
+Local Compose stores PostgreSQL data in the `postgres_data` volume. Create encrypted custom-format backups outside the repository and restrict access because database backups contain customer and vehicle records:
+
+```sh
+BACKUP_FILE=/secure/backups/service-scheduler-$(date +%Y%m%d-%H%M%S).dump
+docker compose exec -T postgres pg_dump -U postgres -d service_scheduler --format=custom > "$BACKUP_FILE"
+```
+
+To validate a backup, restore it to a separate empty database rather than over the active database:
+
+```sh
+docker compose exec postgres createdb -U postgres service_scheduler_restore
+docker compose exec -T postgres pg_restore -U postgres --no-owner -d service_scheduler_restore < "$BACKUP_FILE"
+```
+
+Point a local API process at `service_scheduler_restore`, then check `/api/v1/ready` and run read-only smoke queries before considering recovery successful. Production backup frequency, encryption keys, off-site storage, retention, restore objectives, and restore ownership must be set with the deployment environment; they are not implied by the local Compose volume.
 
 ## Security and data integrity
 
@@ -80,10 +98,11 @@ Appointments link customers, vehicles, dealerships, services, technicians, and b
 - Treat request IDs and selected slots as untrusted. Derive service duration and resource assignment on the server.
 - Store appointment instants in UTC and interpret recurring schedules in the dealership's IANA timezone. Use `[start, end)` intervals.
 - Preserve appointment history and snapshot booked service details so later configuration changes do not alter past bookings.
+- Retain lifecycle audit events for the lifetime of their appointment history. The MVP has no automatic audit purge; revise this policy only with an approved legal/product retention requirement.
 - Use TLS and managed secret storage in deployed environments; local Compose credentials are for development only.
 
 ## Decisions still open
 
-- Decide later whether to integrate the optional external identity provider and email verification. Define staff provisioning for the MVP.
-- MVP scheduling defaults are 60 days ahead, 2 hours minimum notice, 15-minute increments, fixed dealership-service durations, and zero buffers. Define actor permissions for appointment status transitions.
+- Optional external identity-provider integration and email verification remain deferred beyond the MVP.
+- Staff provisioning permissions, scheduling defaults, and appointment lifecycle permissions are defined in [plan.md](plan.md). Ongoing membership role changes and deactivation are not currently exposed by the API.
 - Choose production hosting, regions, and API routing when deployment is in scope.

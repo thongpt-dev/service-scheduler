@@ -4,6 +4,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import { and, asc, desc, eq, gte, lte, lt, or } from "drizzle-orm";
@@ -76,6 +77,35 @@ function slotUnavailable(
   });
 }
 
+function bookingFailureCode(error: unknown): string {
+  const databaseCode = databaseErrorCode(error);
+  if (databaseCode === "23P01") {
+    return "SLOT_UNAVAILABLE";
+  }
+  if (error instanceof ConflictException) {
+    const response = error.getResponse();
+    if (
+      response &&
+      typeof response === "object" &&
+      "code" in response &&
+      typeof response.code === "string"
+    ) {
+      return response.code;
+    }
+    return "CONFLICT";
+  }
+  if (error instanceof BadRequestException) {
+    return "INVALID_REQUEST";
+  }
+  if (error instanceof ForbiddenException) {
+    return "FORBIDDEN";
+  }
+  if (error instanceof NotFoundException) {
+    return "RESOURCE_UNAVAILABLE";
+  }
+  return "BOOKING_FAILED";
+}
+
 function requestHash(
   input: BookingInput,
   bookingChannel: "customer_self_service" | "staff_assisted",
@@ -96,6 +126,8 @@ function requestHash(
 
 @Injectable()
 export class AppointmentsService {
+  private readonly bookingLogger = new Logger("AppointmentOutcome");
+
   constructor(@InjectDb() private readonly db: Database) {}
 
   async createSelfService(
@@ -508,6 +540,54 @@ export class AppointmentsService {
   }
 
   private async createBooking(
+    auth: AuthContext,
+    input: BookingInput,
+    rawIdempotencyKey: string,
+    bookingChannel: "customer_self_service" | "staff_assisted",
+  ): Promise<BookingResult> {
+    const startedAt = Date.now();
+    try {
+      const result = await this.performBooking(
+        auth,
+        input,
+        rawIdempotencyKey,
+        bookingChannel,
+      );
+      this.logBookingOutcome(
+        bookingChannel,
+        result.replayed ? "replayed" : "confirmed",
+        Date.now() - startedAt,
+      );
+      return result;
+    } catch (error) {
+      this.logBookingOutcome(
+        bookingChannel,
+        "rejected",
+        Date.now() - startedAt,
+        bookingFailureCode(error),
+      );
+      throw error;
+    }
+  }
+
+  private logBookingOutcome(
+    bookingChannel: "customer_self_service" | "staff_assisted",
+    outcome: "confirmed" | "replayed" | "rejected",
+    durationMs: number,
+    failureCode?: string,
+  ): void {
+    this.bookingLogger.log(
+      JSON.stringify({
+        event: "appointment_booking",
+        bookingChannel,
+        outcome,
+        ...(failureCode ? { failureCode } : {}),
+        durationMs,
+      }),
+    );
+  }
+
+  private async performBooking(
     auth: AuthContext,
     input: BookingInput,
     rawIdempotencyKey: string,

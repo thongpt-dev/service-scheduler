@@ -23,6 +23,18 @@ Before using auth endpoints, set `JWT_SECRET` in `.env` to at least 32 random by
 
 The API listens on `http://localhost:3000`. Swagger UI is at `/api/docs`. URI versioning uses `/api` as the global prefix and defaults unversioned controllers to v1; this MVP currently implements v1 only. The public health and readiness endpoints are `/api/v1/health` and `/api/v1/ready`; readiness returns `503` when PostgreSQL is unavailable.
 
+## Container image
+
+Build the production image from `be/`:
+
+```sh
+docker build -t service-scheduler-api .
+```
+
+The image runs as the non-root `node` user, listens on port `3000`, and uses `/api/v1/ready` for its container health check. Supply `DATABASE_URL`, `JWT_SECRET`, and any other runtime settings through the deployment environment; `.env` files are excluded from the image. When connecting to the local Compose database from a separately launched container, use a database host reachable from that container, such as `host.docker.internal` for the published local port.
+
+Migrations are deliberately not run when the API container starts. Build the one-shot migration image with `docker build --target migrate -t service-scheduler-migrate .` and run it with the same database configuration/network before deploying the application image. The migration target includes development tooling; do not use it as the long-running API container.
+
 The auth endpoints are `/api/v1/auth/customers/register`, `/api/v1/auth/customers/login`, `/api/v1/auth/staff/login`, `/api/v1/auth/staff/provision`, and `/api/v1/auth/tokens/revoke-all`. Customer and provisioned staff accounts are unverified but can sign in; email verification is not implemented in the MVP. Only dealership owners and managers may provision within their own dealership; managers can provision staff accounts only. An authenticated customer or staff account can create a dealership and becomes its initial owner.
 
 The domain APIs include customer profiles and dealership-customer association, dealership-scoped customer/vehicle management, dealership hours and closures, technician qualifications/shifts/leave, service bays and capabilities, shared service types, dealership-specific service offerings, and advisory availability search. Vehicle access remains explicitly assigned per dealership. Appointment APIs support self-service and staff-assisted booking, customer appointment history, dealership schedule search, cancellation, rescheduling, and staff status updates, with PII-minimized lifecycle audit events. See [api.md](../docs/api.md) for implemented routes and access scopes.
@@ -62,3 +74,21 @@ TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/service_schedule
 ```
 
 `test:api` refuses databases other than `service_scheduler_test`, starts the real Nest application on an ephemeral loopback port, runs HTTP flows with the seeded demo accounts, and cancels appointments it created. It does not reset the database.
+
+## Backup and recovery
+
+For local PostgreSQL, create custom-format backups outside the repository. Backups contain customer and vehicle data; encrypt them at rest and restrict access.
+
+```sh
+BACKUP_FILE=/secure/backups/service-scheduler-$(date +%Y%m%d-%H%M%S).dump
+docker compose exec -T postgres pg_dump -U postgres -d service_scheduler --format=custom > "$BACKUP_FILE"
+```
+
+To verify recoverability, restore into a separate empty database:
+
+```sh
+docker compose exec postgres createdb -U postgres service_scheduler_restore
+docker compose exec -T postgres pg_restore -U postgres --no-owner -d service_scheduler_restore < "$BACKUP_FILE"
+```
+
+Point a local API process at the restored database and verify `/api/v1/ready` plus read-only API queries. Production backup cadence, encryption-key handling, off-site storage, retention, restore objectives, and ownership remain deployment decisions.
