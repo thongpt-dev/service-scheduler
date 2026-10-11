@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { AvailabilityModule } from "./availability/availability.module";
+import { AppointmentsModule } from "./appointments/appointments.module";
 import { AuthModule } from "./auth/auth.module";
 import { CustomersModule } from "./customers/customers.module";
 import { DealershipsModule } from "./dealerships/dealerships.module";
@@ -15,6 +16,7 @@ import { VehiclesModule } from "./vehicles/vehicles.module";
     ConfigModule.forRoot({ isGlobal: true }),
     AuthModule,
     AvailabilityModule,
+    AppointmentsModule,
     CustomersModule,
     DealershipsModule,
     VehiclesModule,

@@ -11,6 +11,7 @@ import { resolve } from "node:path";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { AvailabilityService } from "../src/availability/availability.service";
+import { AppointmentsService } from "../src/appointments/appointments.service";
 import {
   addCalendarDays,
   formatLocalDate,
@@ -91,6 +92,7 @@ async function run(): Promise<void> {
     }),
   );
   const availabilityService = new AvailabilityService(db);
+  const appointmentsService = new AppointmentsService(db);
   const customersService = new CustomersService(db);
   const dealershipsService = new DealershipsService(db);
   const vehiclesService = new VehiclesService(db, customersService);
@@ -353,17 +355,65 @@ async function run(): Promise<void> {
     }
 
     const brakeServiceTypeId = "22222222-2222-4222-8222-222222222223";
-    await serviceCatalogService.createDealershipService(
+    const existingBrakeOffering = (
+      await serviceCatalogService.listDealershipServices(sampleDealershipId)
+    ).find((offering) => offering.serviceTypeId === brakeServiceTypeId);
+    if (existingBrakeOffering) {
+      await serviceCatalogService.updateDealershipService(
+        ownerAuth,
+        sampleDealershipId,
+        existingBrakeOffering.id,
+        { durationMinutes: 60, isActive: true },
+      );
+    } else {
+      await serviceCatalogService.createDealershipService(
+        ownerAuth,
+        sampleDealershipId,
+        { serviceTypeId: brakeServiceTypeId, durationMinutes: 60 },
+      );
+    }
+    const seededBrakeQualifications =
+      await techniciansService.listQualifications(
+        ownerAuth,
+        sampleDealershipId,
+        "33333333-3333-4333-8333-333333333333",
+      );
+    const existingBrakeQualification = seededBrakeQualifications.find(
+      (qualification) => qualification.serviceTypeId === brakeServiceTypeId,
+    );
+    if (existingBrakeQualification) {
+      await techniciansService.updateQualification(
+        ownerAuth,
+        sampleDealershipId,
+        "33333333-3333-4333-8333-333333333333",
+        brakeServiceTypeId,
+        { validFrom: null, validTo: null },
+      );
+    } else {
+      await techniciansService.createQualification(
+        ownerAuth,
+        sampleDealershipId,
+        "33333333-3333-4333-8333-333333333333",
+        { serviceTypeId: brakeServiceTypeId },
+      );
+    }
+    const seededCapabilities = await serviceBaysService.listCapabilities(
       ownerAuth,
       sampleDealershipId,
-      { serviceTypeId: brakeServiceTypeId, durationMinutes: 60 },
+      "44444444-4444-4444-8444-444444444444",
     );
-    await techniciansService.createQualification(
-      ownerAuth,
-      sampleDealershipId,
-      "33333333-3333-4333-8333-333333333333",
-      { serviceTypeId: brakeServiceTypeId },
-    );
+    if (
+      seededCapabilities.some(
+        (capability) => capability.serviceTypeId === brakeServiceTypeId,
+      )
+    ) {
+      await serviceBaysService.deleteCapability(
+        ownerAuth,
+        sampleDealershipId,
+        "44444444-4444-4444-8444-444444444444",
+        brakeServiceTypeId,
+      );
+    }
     const availabilityWithoutCompatibleBay =
       await availabilityService.getAvailability(customerAuth, {
         dealershipId: sampleDealershipId,
@@ -391,6 +441,159 @@ async function run(): Promise<void> {
     assert(
       availabilityWithCompatibleBay.slots.length > 0,
       "An active compatible bay allows otherwise eligible slots",
+    );
+
+    const selfBookingAvailability = await availabilityService.getAvailability(
+      customerAuth,
+      {
+        dealershipId: sampleDealershipId,
+        vehicleId: sampleVehicleId,
+        serviceTypeId: sampleServiceTypeId,
+        date: availabilityDate,
+      },
+    );
+    const selfBookingSlot = selfBookingAvailability.slots[0];
+    const alternateSelfBookingSlot = selfBookingAvailability.slots[1];
+    assert(
+      selfBookingSlot !== undefined &&
+        alternateSelfBookingSlot !== undefined &&
+        selfBookingSlot.startsAt.length > 0,
+      "Expected multiple candidate slots for booking and concurrency tests",
+    );
+    const selfBookingRequest = {
+      dealershipId: sampleDealershipId,
+      vehicleId: sampleVehicleId,
+      serviceTypeId: sampleServiceTypeId,
+      startsAt: selfBookingSlot.startsAt,
+    };
+    const selfBookingKey = `self-${randomUUID()}`;
+    const selfBooking = await appointmentsService.createSelfService(
+      customerAuth,
+      selfBookingRequest,
+      selfBookingKey,
+    );
+    assert(
+      selfBooking.appointment.customerId === sampleCustomer.id &&
+        selfBooking.appointment.bookingChannel === "customer_self_service" &&
+        selfBooking.appointment.durationMinutesSnapshot === 60 &&
+        selfBooking.appointment.assignedTechnicianId.length > 0 &&
+        selfBooking.appointment.assignedBayId.length > 0 &&
+        selfBooking.replayed === false,
+      "Self-service booking derives customer and duration and confirms once",
+    );
+    const selfBookingReplay = await appointmentsService.createSelfService(
+      customerAuth,
+      selfBookingRequest,
+      selfBookingKey,
+    );
+    assert(
+      selfBookingReplay.replayed &&
+        selfBookingReplay.appointment.id === selfBooking.appointment.id,
+      "Matching idempotency retries return the original appointment",
+    );
+    await expectError(
+      () =>
+        appointmentsService.createSelfService(
+          customerAuth,
+          {
+            ...selfBookingRequest,
+            startsAt: alternateSelfBookingSlot.startsAt,
+          },
+          selfBookingKey,
+        ),
+      ConflictException,
+      "Reusing an idempotency key with a different request must conflict",
+    );
+
+    const concurrencyAvailability = await availabilityService.getAvailability(
+      customerAuth,
+      {
+        dealershipId: sampleDealershipId,
+        vehicleId: sampleVehicleId,
+        serviceTypeId: sampleServiceTypeId,
+        date: availabilityDate,
+      },
+    );
+    const competingSlot = concurrencyAvailability.slots[0];
+    assert(
+      competingSlot !== undefined,
+      "Expected a fresh candidate slot after the initial booking",
+    );
+    assert(
+      new Date(competingSlot.startsAt) >= selfBooking.appointment.endsAt,
+      `Concurrency candidate overlaps the initial booking: candidate=${competingSlot.startsAt}, initialEnd=${selfBooking.appointment.endsAt.toISOString()}`,
+    );
+    const competingRequest = {
+      ...selfBookingRequest,
+      startsAt: competingSlot.startsAt,
+    };
+    const competingBookings = await Promise.allSettled([
+      appointmentsService.createSelfService(
+        customerAuth,
+        competingRequest,
+        `compete-${randomUUID()}`,
+      ),
+      appointmentsService.createSelfService(
+        customerAuth,
+        competingRequest,
+        `compete-${randomUUID()}`,
+      ),
+    ]);
+    const successfulCompetitors = competingBookings.filter(
+      (result) => result.status === "fulfilled",
+    );
+    const rejectedCompetitors = competingBookings.filter(
+      (result) => result.status === "rejected",
+    );
+    const competingFailureMessages = rejectedCompetitors.map((result) =>
+      result.status === "rejected" && result.reason instanceof Error
+        ? result.reason.message
+        : "unknown error",
+    );
+    assert(
+      successfulCompetitors.length === 1 &&
+        rejectedCompetitors.length === 1 &&
+        rejectedCompetitors[0].reason instanceof ConflictException,
+      `Only one competing request can confirm the same technician/bay interval; succeeded=${successfulCompetitors.length}, failures=${competingFailureMessages.join(" | ")}`,
+    );
+
+    const mountainDealershipId = "11111111-1111-4111-8111-111111111112";
+    const mountainCustomerId = "55555555-5555-4555-8555-555555555556";
+    const mountainVehicleId = "66666666-6666-4666-8666-666666666667";
+    const mountainStandardServiceId = "22222222-2222-4222-8222-222222222222";
+    const mountainDate = nextWeekdayDate("America/Denver");
+    const mountainAvailability = await availabilityService.getAvailability(
+      ownerAuth,
+      {
+        dealershipId: mountainDealershipId,
+        customerId: mountainCustomerId,
+        vehicleId: mountainVehicleId,
+        serviceTypeId: mountainStandardServiceId,
+        date: mountainDate,
+      },
+    );
+    const assistedSlot = mountainAvailability.slots[0];
+    assert(
+      assistedSlot !== undefined,
+      "Expected an available staff-assisted slot",
+    );
+    const assistedBooking = await appointmentsService.createStaffAssisted(
+      ownerAuth,
+      {
+        dealershipId: mountainDealershipId,
+        customerId: mountainCustomerId,
+        vehicleId: mountainVehicleId,
+        serviceTypeId: mountainStandardServiceId,
+        startsAt: assistedSlot.startsAt,
+      },
+      `staff-${randomUUID()}`,
+    );
+    assert(
+      assistedBooking.appointment.customerId === mountainCustomerId &&
+        assistedBooking.appointment.vehicleId === mountainVehicleId &&
+        assistedBooking.appointment.bookingChannel === "staff_assisted" &&
+        assistedBooking.appointment.durationMinutesSnapshot === 75,
+      "Staff-assisted booking uses the selected associated customer and dealership duration",
     );
 
     await expectError(

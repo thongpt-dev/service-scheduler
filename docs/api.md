@@ -90,26 +90,24 @@ Staff provisioning:
 
 These values are illustrative only. Never use real credentials in API examples.
 
+## Appointment creation endpoints
+
+| Method and path | Authentication | Purpose | Success |
+| --- | --- | --- | --- |
+| `POST /api/v1/appointments/self-service` | Customer JWT | Confirm an appointment for the customer in the token. | `201` |
+| `POST /api/v1/appointments/staff-assisted` | Owner, manager, or staff membership in the target dealership | Confirm an appointment for the specified associated customer. | `201` |
+
+Both endpoints require an `Idempotency-Key` header (1-255 characters). Keys are scoped to the authenticated actor and appointment-create operation and retained for 24 hours. A retry with the same normalized request returns the original appointment; reusing the key for a different request returns `409 IDEMPOTENCY_KEY_REUSED`. Capacity conflicts return `409 SLOT_UNAVAILABLE`.
+
+The JSON body contains `dealershipId`, `vehicleId`, `serviceTypeId`, and a zoned `startsAt`; staff-assisted requests also contain `customerId`. Self-service customer identity comes from the JWT. The server validates explicit dealership vehicle assignment and customer ownership/shared access, derives duration from the active dealership offering, checks hours/closures and resource eligibility, and allocates both resources within one transaction. Client-provided end times, duration, technician, and bay are not accepted.
+
 ## Planned MVP endpoint surface
 
 The following business endpoints are in the MVP plan but are not yet implemented. Their detailed request/response DTOs, exact resource paths where not listed, and Swagger examples must be added alongside each controller in the feature implementation step; this inventory is not evidence that those endpoints already exist.
 
 | Feature | Planned routes/capabilities | Access scope |
 | --- | --- | --- |
-| Appointments | Create self-service and staff-assisted bookings; list/read appointments; search a dealership schedule; cancel and reschedule. | Customers access their own authorized appointments; staff access only their dealership and permitted actions. |
-
-## Booking request contract
-
-When appointment creation is implemented, the client sends only:
-
-- `dealershipId`
-- `vehicleId`
-- `serviceTypeId`
-- requested `startsAt`
-- required idempotency key (header or request location to be fixed in the booking endpoint specification)
-- `customerId` only for staff-assisted booking
-
-The server derives duration from the active dealership-service offering, calculates `endsAt`, validates access and availability, and assigns technician and bay. Client-provided end times or technician/bay assignments are not authoritative and must not be accepted as booking decisions.
+| Appointments | List/read appointments; search a dealership schedule; cancel and reschedule. | Customers access their own authorized appointments; staff access only their dealership and permitted actions. |
 
 Availability results are advisory. Confirmation rechecks the full interval inside the booking transaction. On cancellation capacity is released; rescheduling changes the existing booking only when the replacement interval and both resources are secured atomically.
 
