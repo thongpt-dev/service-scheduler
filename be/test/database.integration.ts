@@ -1,0 +1,325 @@
+import { execFileSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { resolve } from "node:path";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { Pool } from "pg";
+
+const seededIds = {
+  dealership: "11111111-1111-4111-8111-111111111111",
+  serviceType: "22222222-2222-4222-8222-222222222222",
+  technician: "33333333-3333-4333-8333-333333333333",
+  bay: "44444444-4444-4444-8444-444444444444",
+  customer: "55555555-5555-4555-8555-555555555555",
+  vehicle: "66666666-6666-4666-8666-666666666666",
+};
+
+function databaseErrorCode(error: unknown): string | undefined {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = error.code;
+    return typeof code === "string" ? code : undefined;
+  }
+
+  return undefined;
+}
+
+function assert(condition: boolean, message: string): asserts condition {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+async function expectPostgresError(
+  operation: () => Promise<unknown>,
+  expectedCode: string,
+  message: string,
+): Promise<void> {
+  try {
+    await operation();
+  } catch (error) {
+    assert(databaseErrorCode(error) === expectedCode, message);
+    return;
+  }
+
+  throw new Error(message);
+}
+
+async function seed(pool: Pool, databaseUrl: string): Promise<void> {
+  const workspaceRoot = resolve(__dirname, "..");
+  execFileSync("npm", ["run", "db:seed"], {
+    cwd: workspaceRoot,
+    env: {
+      ...process.env,
+      DATABASE_URL: databaseUrl,
+    },
+    stdio: "inherit",
+  });
+
+  const result = await pool.query<{
+    dealership: string;
+    hours: string;
+    technician: string;
+    bay: string;
+    vehicle: string;
+  }>(
+    `SELECT
+      (SELECT count(*) FROM dealerships WHERE id = $1) AS dealership,
+      (SELECT count(*) FROM dealership_hours WHERE dealership_id = $1) AS hours,
+      (SELECT count(*) FROM technicians WHERE id = $2) AS technician,
+      (SELECT count(*) FROM service_bays WHERE id = $3) AS bay,
+      (SELECT count(*) FROM vehicles WHERE id = $4) AS vehicle`,
+    [
+      seededIds.dealership,
+      seededIds.technician,
+      seededIds.bay,
+      seededIds.vehicle,
+    ],
+  );
+  const counts = result.rows[0];
+  assert(
+    counts.dealership === "1" &&
+      counts.hours === "7" &&
+      counts.technician === "1" &&
+      counts.bay === "1" &&
+      counts.vehicle === "1",
+    "Seed should create one copy of each fixture and seven weekly-hours rows",
+  );
+}
+
+async function run(): Promise<void> {
+  const testDatabaseUrl = process.env.TEST_DATABASE_URL;
+  if (!testDatabaseUrl) {
+    throw new Error(
+      "Set TEST_DATABASE_URL to run PostgreSQL integration checks",
+    );
+  }
+
+  const testDatabaseName = new URL(testDatabaseUrl).pathname.slice(1);
+  if (testDatabaseName !== "service_scheduler_test") {
+    throw new Error(
+      "Refusing to reset a database other than service_scheduler_test",
+    );
+  }
+
+  const pool = new Pool({ connectionString: testDatabaseUrl });
+  try {
+    await pool.query("DROP SCHEMA IF EXISTS drizzle CASCADE");
+    await pool.query("DROP SCHEMA public CASCADE");
+    await pool.query("CREATE SCHEMA public");
+    await migrate(drizzle({ client: pool }), {
+      migrationsFolder: "./drizzle",
+    });
+
+    const tableResult = await pool.query<{ count: string }>(
+      "SELECT count(*) FROM pg_tables WHERE schemaname = 'public'",
+    );
+    assert(tableResult.rows[0].count === "18", "Expected 18 MVP tables");
+
+    await seed(pool, testDatabaseUrl);
+    await seed(pool, testDatabaseUrl);
+
+    const testUserId = randomUUID();
+    const testSuffix = randomUUID().slice(0, 8);
+    await pool.query(
+      "INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3)",
+      [testUserId, `schema-test-${testSuffix}@example.test`, "test-only-hash"],
+    );
+
+    const secondTechnicianId = randomUUID();
+    const secondBayId = randomUUID();
+    const unqualifiedTechnicianId = randomUUID();
+    const unsupportedBayId = randomUUID();
+    await pool.query(
+      "INSERT INTO technicians (id, dealership_id, display_name, employee_code) VALUES ($1, $2, $3, $4)",
+      [
+        secondTechnicianId,
+        seededIds.dealership,
+        "Schema Test Technician",
+        `SCHEMA-${testSuffix}`,
+      ],
+    );
+    await pool.query(
+      "INSERT INTO technician_qualifications (technician_id, service_type_id) VALUES ($1, $2)",
+      [secondTechnicianId, seededIds.serviceType],
+    );
+    await pool.query(
+      "INSERT INTO service_bays (id, dealership_id, bay_code) VALUES ($1, $2, $3)",
+      [secondBayId, seededIds.dealership, `SCHEMA-${testSuffix}`],
+    );
+    await pool.query(
+      "INSERT INTO bay_service_capabilities (bay_id, service_type_id) VALUES ($1, $2)",
+      [secondBayId, seededIds.serviceType],
+    );
+    await pool.query(
+      "INSERT INTO technicians (id, dealership_id, display_name, employee_code) VALUES ($1, $2, $3, $4)",
+      [
+        unqualifiedTechnicianId,
+        seededIds.dealership,
+        "Unqualified Schema Test Technician",
+        `UNQUALIFIED-${testSuffix}`,
+      ],
+    );
+    await pool.query(
+      "INSERT INTO service_bays (id, dealership_id, bay_code) VALUES ($1, $2, $3)",
+      [unsupportedBayId, seededIds.dealership, `UNSUPPORTED-${testSuffix}`],
+    );
+
+    const startsAt = new Date("2030-01-07T18:00:00.000Z");
+    const endsAt = new Date("2030-01-07T19:00:00.000Z");
+    const insertAppointment = async (
+      reference: string,
+      status: "confirmed" | "cancelled" | "completed" | "no_show",
+      technicianId: string,
+      bayId: string,
+      appointmentStartsAt = startsAt,
+      appointmentEndsAt = endsAt,
+    ): Promise<string> => {
+      const result = await pool.query<{ id: string }>(
+        `INSERT INTO appointments (
+          appointment_ref, customer_id, vehicle_id, dealership_id,
+          service_type_id, assigned_technician_id, assigned_bay_id,
+          created_by_user_id, booking_channel, status, starts_at, ends_at,
+          service_name_snapshot, duration_minutes_snapshot
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        RETURNING id`,
+        [
+          reference,
+          seededIds.customer,
+          seededIds.vehicle,
+          seededIds.dealership,
+          seededIds.serviceType,
+          technicianId,
+          bayId,
+          testUserId,
+          "customer_self_service",
+          status,
+          appointmentStartsAt,
+          appointmentEndsAt,
+          "Standard Maintenance",
+          60,
+        ],
+      );
+      return result.rows[0].id;
+    };
+
+    const firstAppointmentId = await insertAppointment(
+      `SCHEMA-${testSuffix}-1`,
+      "confirmed",
+      seededIds.technician,
+      seededIds.bay,
+    );
+
+    const overlappingAssignments: Array<[string, string]> = [
+      [seededIds.technician, secondBayId],
+      [secondTechnicianId, seededIds.bay],
+    ];
+    for (const [technicianId, bayId] of overlappingAssignments) {
+      await expectPostgresError(
+        () =>
+          insertAppointment(
+            `SCHEMA-${testSuffix}-${randomUUID().slice(0, 4)}`,
+            "confirmed",
+            technicianId,
+            bayId,
+          ),
+        "23P01",
+        "Overlapping confirmed appointment should violate a capacity exclusion constraint",
+      );
+    }
+
+    await insertAppointment(
+      `SCHEMA-${testSuffix}-adjacent`,
+      "confirmed",
+      seededIds.technician,
+      seededIds.bay,
+      endsAt,
+      new Date("2030-01-07T20:00:00.000Z"),
+    );
+    const nonReservingStatuses = ["cancelled", "completed", "no_show"] as const;
+    for (const status of nonReservingStatuses) {
+      await insertAppointment(
+        `SCHEMA-${testSuffix}-${status}`,
+        status,
+        seededIds.technician,
+        seededIds.bay,
+      );
+    }
+
+    await expectPostgresError(
+      () =>
+        insertAppointment(
+          `SCHEMA-${testSuffix}-unqualified`,
+          "confirmed",
+          unqualifiedTechnicianId,
+          secondBayId,
+        ),
+      "23503",
+      "Appointment must reference a technician qualified for the service",
+    );
+    await expectPostgresError(
+      () =>
+        insertAppointment(
+          `SCHEMA-${testSuffix}-unsupported-bay`,
+          "confirmed",
+          secondTechnicianId,
+          unsupportedBayId,
+        ),
+      "23503",
+      "Appointment must reference a bay capable of the service",
+    );
+
+    const requestHash = createHash("sha256")
+      .update(`request-${testSuffix}`)
+      .digest("hex");
+    await pool.query(
+      `INSERT INTO idempotency_records
+        (actor_user_id, operation, idempotency_key, request_hash, appointment_id)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        testUserId,
+        "appointment:create",
+        `schema-test-${testSuffix}`,
+        requestHash,
+        firstAppointmentId,
+      ],
+    );
+    const idempotencyResult = await pool.query<{ within_ttl: boolean }>(
+      `SELECT expires_at <= created_at + interval '24 hours' AS within_ttl
+       FROM idempotency_records
+       WHERE actor_user_id = $1 AND operation = $2 AND idempotency_key = $3`,
+      [testUserId, "appointment:create", `schema-test-${testSuffix}`],
+    );
+    assert(
+      idempotencyResult.rows[0].within_ttl === true,
+      "Idempotency records must expire within 24 hours",
+    );
+    await expectPostgresError(
+      () =>
+        pool.query(
+          `INSERT INTO idempotency_records
+            (actor_user_id, operation, idempotency_key, request_hash, appointment_id)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [
+            testUserId,
+            "appointment:create",
+            `schema-test-${testSuffix}`,
+            createHash("sha256").update("different-request").digest("hex"),
+            firstAppointmentId,
+          ],
+        ),
+      "23505",
+      "Actor, operation, and idempotency key must be unique",
+    );
+
+    console.log(
+      "Database integration checks passed: migrations, repeatable seed, compatibility FKs, capacity exclusions, and 24-hour idempotency TTL.",
+    );
+  } finally {
+    await pool.end();
+  }
+}
+
+void run().catch((error: unknown) => {
+  console.error(error);
+  process.exitCode = 1;
+});
