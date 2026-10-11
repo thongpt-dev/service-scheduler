@@ -14,7 +14,7 @@ The API enforces every permission. Resource IDs supplied by a client do not gran
 
 The backend stores:
 
-- **Identity and access:** users, password hashes, customer profiles, nullable `emailVerifiedAt` (null means unverified), dealership memberships, and roles. New accounts are unverified by default; the MVP does not provide verification flows or use this flag to block sign-in or booking.
+- **Identity and access:** users, password hashes, customer profiles, nullable `emailVerifiedAt` (null means unverified), dealership memberships, and roles. Access JWTs are short-lived; rotating opaque refresh sessions are stored by token hash and issued in HttpOnly cookies. New accounts are unverified by default; the MVP does not provide verification flows or use this flag to block sign-in or booking.
 - **Customers and vehicles:** customer details, vehicle ownership, and explicit access for additional customers.
 - **Dealership customers and vehicles:** customers initiate dealership association. That association scopes the customer profile only and does not expose vehicles. Vehicle access is granted separately per dealership: the owner can assign a vehicle, or staff can assign one during intake. Dealership staff can access only explicitly assigned vehicles, and customer sharing still controls which associated customer may use each vehicle.
 - **Dealership configuration:** dealership details and timezone, a shared service-type catalog and dealership-specific offerings/durations, operating hours and closures, technicians and qualifications/shifts/leave, and bays and service capabilities.

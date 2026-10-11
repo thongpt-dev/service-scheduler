@@ -8,13 +8,14 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import jwt from "jsonwebtoken";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { InjectDb, type Database } from "../database/database.types";
 import {
   customers,
   dealershipMembershipRoleEnum,
   dealershipMemberships,
   dealerships,
+  refreshTokenSessions,
   users,
 } from "../database/schema";
 import type {
@@ -26,6 +27,7 @@ import type {
   PrincipalRole,
   RegisterCustomerInput,
 } from "./auth.types";
+import type { IssuedToken } from "./token.types";
 import { hashPassword, normalizeEmail, verifyPassword } from "./security.util";
 
 interface JwtConfiguration {
@@ -33,18 +35,13 @@ interface JwtConfiguration {
   issuer: string;
   audience: string;
   expiresInSeconds: number;
+  refreshTokenTtlSeconds: number;
 }
 
 interface AccessTokenClaims {
   subject: string;
   tokenVersion: number;
   tokenId: string;
-}
-
-export interface IssuedToken {
-  accessToken: string;
-  tokenType: "Bearer";
-  expiresIn: number;
 }
 
 function databaseErrorCode(error: unknown): string | undefined {
@@ -302,19 +299,144 @@ export class AuthService {
   }
 
   async revokeAllTokens(actor: AuthContext): Promise<{ revoked: true }> {
-    const [user] = await this.db
-      .update(users)
-      .set({
-        tokenVersion: sql`${users.tokenVersion} + 1`,
-        updatedAt: new Date(),
-      })
-      .where(and(eq(users.id, actor.userId), eq(users.isActive, true)))
-      .returning({ id: users.id });
-    if (!user) {
+    const revoked = await this.db.transaction(async (tx) => {
+      const [user] = await tx
+        .update(users)
+        .set({
+          tokenVersion: sql`${users.tokenVersion} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(users.id, actor.userId), eq(users.isActive, true)))
+        .returning({ id: users.id });
+      if (!user) return false;
+
+      await tx
+        .update(refreshTokenSessions)
+        .set({ revokedAt: new Date() })
+        .where(
+          and(
+            eq(refreshTokenSessions.userId, actor.userId),
+            isNull(refreshTokenSessions.revokedAt),
+          ),
+        );
+      return true;
+    });
+    if (!revoked) {
       throw new UnauthorizedException("User is inactive");
     }
 
     return { revoked: true };
+  }
+
+  async refreshAccessToken(
+    rawRefreshToken: string | undefined,
+  ): Promise<IssuedToken> {
+    if (!rawRefreshToken || rawRefreshToken.length > 256) {
+      throw new UnauthorizedException("Invalid refresh token");
+    }
+
+    const configuration = this.getJwtConfiguration();
+    const tokenHash = this.hashRefreshToken(rawRefreshToken);
+    const now = new Date();
+    const rotation = await this.db.transaction(async (tx) => {
+      const [session] = await tx
+        .select()
+        .from(refreshTokenSessions)
+        .where(eq(refreshTokenSessions.tokenHash, tokenHash))
+        .limit(1)
+        .for("update");
+      if (!session) return { kind: "invalid" as const };
+
+      if (session.revokedAt) {
+        await tx
+          .update(refreshTokenSessions)
+          .set({ revokedAt: now })
+          .where(
+            and(
+              eq(refreshTokenSessions.familyId, session.familyId),
+              isNull(refreshTokenSessions.revokedAt),
+            ),
+          );
+        return { kind: "reused" as const };
+      }
+
+      if (session.expiresAt <= now) {
+        await tx
+          .update(refreshTokenSessions)
+          .set({ revokedAt: now })
+          .where(eq(refreshTokenSessions.id, session.id));
+        return { kind: "expired" as const };
+      }
+
+      const [user] = await tx
+        .select({
+          id: users.id,
+          tokenVersion: users.tokenVersion,
+          isActive: users.isActive,
+        })
+        .from(users)
+        .where(eq(users.id, session.userId))
+        .limit(1);
+      if (
+        !user ||
+        !user.isActive ||
+        user.tokenVersion !== session.tokenVersion
+      ) {
+        await tx
+          .update(refreshTokenSessions)
+          .set({ revokedAt: now })
+          .where(
+            and(
+              eq(refreshTokenSessions.familyId, session.familyId),
+              isNull(refreshTokenSessions.revokedAt),
+            ),
+          );
+        return { kind: "revoked" as const };
+      }
+
+      const nextRefreshToken = randomBytes(32).toString("base64url");
+      await tx
+        .update(refreshTokenSessions)
+        .set({ revokedAt: now })
+        .where(
+          and(
+            eq(refreshTokenSessions.id, session.id),
+            isNull(refreshTokenSessions.revokedAt),
+          ),
+        );
+      await tx.insert(refreshTokenSessions).values({
+        userId: user.id,
+        familyId: session.familyId,
+        tokenHash: this.hashRefreshToken(nextRefreshToken),
+        tokenVersion: user.tokenVersion,
+        expiresAt: new Date(
+          now.getTime() + configuration.refreshTokenTtlSeconds * 1000,
+        ),
+      });
+
+      return {
+        kind: "rotated" as const,
+        userId: user.id,
+        tokenVersion: user.tokenVersion,
+        refreshToken: nextRefreshToken,
+      };
+    });
+
+    if (rotation.kind !== "rotated") {
+      throw new UnauthorizedException("Invalid or expired refresh token");
+    }
+
+    return {
+      accessToken: this.signAccessToken(
+        rotation.userId,
+        rotation.tokenVersion,
+        configuration,
+      ),
+      tokenType: "Bearer",
+      expiresIn: configuration.expiresInSeconds,
+      refreshToken: rotation.refreshToken,
+      refreshTokenExpiresIn: configuration.refreshTokenTtlSeconds,
+    };
   }
 
   async authenticateBearerToken(token: string): Promise<AuthContext> {
@@ -410,38 +532,65 @@ export class AuthService {
   }
 
   private async issueAccessToken(userId: string): Promise<IssuedToken> {
-    const [user] = await this.db
-      .select({
-        id: users.id,
-        tokenVersion: users.tokenVersion,
-        isActive: users.isActive,
-      })
-      .from(users)
-      .where(eq(users.id, userId))
-      .limit(1);
-    if (!user || !user.isActive) {
-      throw new UnauthorizedException("Invalid credentials");
-    }
-
     const configuration = this.getJwtConfiguration();
-    const accessToken = jwt.sign(
-      { ver: user.tokenVersion },
-      configuration.secret,
-      {
-        algorithm: "HS256",
-        audience: configuration.audience,
-        expiresIn: configuration.expiresInSeconds,
-        issuer: configuration.issuer,
-        jwtid: randomUUID(),
-        subject: user.id,
-      },
-    );
+    const refreshToken = randomBytes(32).toString("base64url");
+    const familyId = randomUUID();
+    const user = await this.db.transaction(async (tx) => {
+      const [currentUser] = await tx
+        .select({
+          id: users.id,
+          tokenVersion: users.tokenVersion,
+          isActive: users.isActive,
+        })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+      if (!currentUser || !currentUser.isActive) {
+        throw new UnauthorizedException("Invalid credentials");
+      }
+
+      await tx.insert(refreshTokenSessions).values({
+        userId: currentUser.id,
+        familyId,
+        tokenHash: this.hashRefreshToken(refreshToken),
+        tokenVersion: currentUser.tokenVersion,
+        expiresAt: new Date(
+          Date.now() + configuration.refreshTokenTtlSeconds * 1000,
+        ),
+      });
+      return currentUser;
+    });
 
     return {
-      accessToken,
+      accessToken: this.signAccessToken(
+        user.id,
+        user.tokenVersion,
+        configuration,
+      ),
       tokenType: "Bearer",
       expiresIn: configuration.expiresInSeconds,
+      refreshToken,
+      refreshTokenExpiresIn: configuration.refreshTokenTtlSeconds,
     };
+  }
+
+  private hashRefreshToken(refreshToken: string): string {
+    return createHash("sha256").update(refreshToken).digest("hex");
+  }
+
+  private signAccessToken(
+    userId: string,
+    tokenVersion: number,
+    configuration: JwtConfiguration,
+  ): string {
+    return jwt.sign({ ver: tokenVersion }, configuration.secret, {
+      algorithm: "HS256",
+      audience: configuration.audience,
+      expiresIn: configuration.expiresInSeconds,
+      issuer: configuration.issuer,
+      jwtid: randomUUID(),
+      subject: userId,
+    });
   }
 
   private verifyAccessToken(token: string): AccessTokenClaims {
@@ -493,12 +642,26 @@ export class AuthService {
       );
     }
 
+    const refreshTokenTtlSeconds = Number(
+      this.config.get<string>("JWT_REFRESH_TOKEN_TTL_SECONDS") ?? "2592000",
+    );
+    if (
+      !Number.isInteger(refreshTokenTtlSeconds) ||
+      refreshTokenTtlSeconds < 86_400 ||
+      refreshTokenTtlSeconds > 7_776_000
+    ) {
+      throw new InternalServerErrorException(
+        "JWT_REFRESH_TOKEN_TTL_SECONDS must be between 86400 and 7776000",
+      );
+    }
+
     return {
       secret,
       issuer: this.config.get<string>("JWT_ISSUER") ?? "service-scheduler-api",
       audience:
         this.config.get<string>("JWT_AUDIENCE") ?? "service-scheduler-clients",
       expiresInSeconds,
+      refreshTokenTtlSeconds,
     };
   }
 

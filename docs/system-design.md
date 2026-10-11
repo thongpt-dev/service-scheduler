@@ -34,8 +34,8 @@ flowchart LR
 ### Sign-in and authorization
 
 1. A user signs up with email and password. The API stores a password hash and marks the new account unverified (`emailVerifiedAt` is null). Email verification is not implemented in the MVP.
-2. The user signs in with email and password. The API returns a signed JWT access token; the browser sends it as `Authorization: Bearer <token>` to protected API endpoints.
-3. The API validates the token signature, expiry, issuer, and audience, then resolves the active user and current customer or dealership membership before authorizing the action. Unverified status does not block MVP sign-in or customer booking. Staff actions are attributed to the authenticated staff member.
+2. The user signs in with email and password. The API returns a short-lived signed JWT access token and sets an opaque refresh token in an HttpOnly cookie. The browser sends the JWT as `Authorization: Bearer <token>` to protected endpoints and exchanges the cookie at `/api/v1/auth/tokens/refresh` when the access token expires.
+3. The API validates the token signature, expiry, issuer, and audience, then resolves the active user and current customer or dealership membership before authorizing the action. Unverified status does not block MVP sign-in or customer booking. Staff actions are attributed to the authenticated staff member. Refresh tokens are random, stored only as hashes, and rotated on every use; reuse of a consumed token revokes its token family. Revoke-all increments `token_version` and revokes all refresh sessions for the user.
 4. If optional external sign-in is added later, the browser sends the provider-issued token to the API as a bearer token. NestJS validates it against the provider's configured issuer and audience, using cached signing keys (JWKS) or token introspection, then maps the external identity to an application user. Provider tokens are not treated as NestJS-issued JWTs.
 
 ### Availability and booking
@@ -95,6 +95,7 @@ Point a local API process at `service_scheduler_restore`, then check `/api/v1/re
 
 - Enforce customer ownership and dealership-scoped roles in the API; client-side route guards do not provide authorization.
 - Hash passwords with a suitable password-hashing algorithm. Keep the JWT signing secret in environment-specific secret storage; validate signature, expiry, issuer, and audience on every protected request. Do not log credentials or tokens.
+- Keep refresh tokens in HttpOnly cookies and store only their SHA-256 hashes in PostgreSQL. Rotate them on every refresh, revoke a family on replay, and invalidate all sessions on revoke-all. Set `Secure` in production and do not log refresh-token values.
 - Treat request IDs and selected slots as untrusted. Derive service duration and resource assignment on the server.
 - Store appointment instants in UTC and interpret recurring schedules in the dealership's IANA timezone. Use `[start, end)` intervals.
 - Preserve appointment history and snapshot booked service details so later configuration changes do not alter past bookings.

@@ -70,6 +70,41 @@ export const users = pgTable(
   ],
 );
 
+export const refreshTokenSessions = pgTable(
+  "refresh_token_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    familyId: uuid("family_id").notNull(),
+    tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+    tokenVersion: integer("token_version").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    unique("refresh_token_sessions_token_hash_unique").on(table.tokenHash),
+    index("refresh_token_sessions_user_idx").on(table.userId, table.expiresAt),
+    index("refresh_token_sessions_family_idx").on(table.familyId),
+    check(
+      "refresh_token_sessions_hash_check",
+      sql`${table.tokenHash} ~ '^[a-f0-9]{64}$'`,
+    ),
+    check(
+      "refresh_token_sessions_version_check",
+      sql`${table.tokenVersion} >= 0`,
+    ),
+    check(
+      "refresh_token_sessions_expiry_check",
+      sql`${table.expiresAt} > ${table.createdAt}`,
+    ),
+  ],
+);
+
 export const customers = pgTable(
   "customers",
   {

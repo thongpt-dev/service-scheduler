@@ -8,6 +8,7 @@ This document describes the PostgreSQL schema implemented in `be/src/database/sc
 erDiagram
     USERS ||--o| CUSTOMERS : "linked account"
     USERS ||--o{ DEALERSHIP_MEMBERSHIPS : has
+    USERS ||--o{ REFRESH_TOKEN_SESSIONS : refreshes
     DEALERSHIPS ||--o{ DEALERSHIP_MEMBERSHIPS : grants
     DEALERSHIPS ||--o{ DEALERSHIP_CUSTOMERS : serves
     CUSTOMERS ||--o{ DEALERSHIP_CUSTOMERS : associated_with
@@ -55,6 +56,16 @@ erDiagram
         boolean is_active
         timestamptz created_at
         timestamptz updated_at
+    }
+    REFRESH_TOKEN_SESSIONS {
+        uuid id PK
+        uuid user_id FK
+        uuid family_id
+        varchar token_hash UK "lowercase SHA-256 hex"
+        integer token_version
+        timestamptz expires_at
+        timestamptz revoked_at "nullable"
+        timestamptz created_at
     }
     CUSTOMERS {
         uuid id PK
@@ -232,6 +243,7 @@ All mutable domain tables use UUID primary keys and timezone-aware `created_at` 
 | Entity | Purpose and important rules |
 | --- | --- |
 | `users` | Login identity. Email is unique and lowercase; `password_hash` is required and stores a salted, parameterized scrypt hash. `email_verified_at` is nullable and remains null for new MVP accounts; verification does not gate sign-in or booking. `token_version` is nonnegative and supports invalidating previously issued tokens. |
+| `refresh_token_sessions` | Stores one SHA-256 hash per opaque refresh token, its user/token-version binding, rotation family, expiry, and revocation time. Tokens rotate on use; replay of a consumed token revokes the remaining family. Revoke-all increments the user token version and revokes all active refresh sessions. Raw refresh tokens are returned only in an HttpOnly cookie and are never stored. |
 | `customers` | Customer profile and contact information. `user_id` is nullable and unique so staff can create a customer before that customer has an account; customer registration links an active unlinked profile when its normalized email matches. A linked customer has at most one user. Customer email is unique and lowercase. |
 | `dealerships` | Dealership identity, address, active state, and IANA timezone. Country code must be uppercase two-letter format. Timezone validity is an API validation responsibility. |
 | `dealership_memberships` | Joins users to dealerships with one membership per user/dealership and role `owner`, `manager`, or `staff`. Memberships can be deactivated without deleting history. |
@@ -315,4 +327,4 @@ Expiry defines the maximum replay window; it does not itself remove a row. Becau
 - `appointment_audit_action`: `cancelled`, `rescheduled`, `completed`, `no_show`.
 - `booking_channel`: `customer_self_service`, `staff_assisted`.
 
-The database schema intentionally does not include email verification codes, external identity-provider sessions, or audit-log tables in this MVP schema. Authentication verification delivery and the separately reviewed audit design remain outside this data-model migration.
+The database schema intentionally does not include email verification codes or external identity-provider sessions. Refresh-token sessions and PII-minimized appointment audit events are included in the MVP schema; verification delivery remains outside this data-model migration.

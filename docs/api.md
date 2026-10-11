@@ -18,7 +18,8 @@ This document is the API contract reference for the backend MVP. The product sco
 | `POST /api/v1/auth/customers/login` | Public | Authenticate a customer by email/password. An unverified customer may sign in. | `200` |
 | `POST /api/v1/auth/staff/login` | Public | Authenticate an active user with at least one active dealership membership. | `200` |
 | `POST /api/v1/auth/staff/provision` | Bearer JWT; owner or manager membership in the target dealership | Create a new unverified account and dealership membership. Managers can create `staff`; owners can assign any dealership membership role. Existing accounts are not re-passworded or linked through this operation. | `201` |
-| `POST /api/v1/auth/tokens/revoke-all` | Bearer JWT | Increment the caller's `token_version`, invalidating previously issued tokens. | `200` |
+| `POST /api/v1/auth/tokens/refresh` | HttpOnly refresh cookie | Rotate the refresh token and issue a new access JWT. Reuse of a consumed token revokes its token family. | `200` |
+| `POST /api/v1/auth/tokens/revoke-all` | Bearer JWT | Increment the caller's `token_version`, invalidating access tokens and all refresh sessions; clear the refresh cookie. | `200` |
 | `GET /api/v1/health` | Public | Process liveness check. | `200` |
 | `GET /api/v1/ready` | Public | Database readiness check. | `200`, `503` |
 
@@ -119,6 +120,7 @@ Customers can cancel or reschedule their own confirmed appointments until the sc
 - New customer and staff accounts have nullable `email_verified_at` set to `null`. No verification-code endpoint, email delivery, or verified-email gate is part of the MVP.
 - Customer registration rejects an email already used by a user account. If an active customer profile exists with that email but has no linked user, registration links the new account to that profile and preserves its existing profile fields; otherwise registration creates a new profile. Since email verification is not implemented, the profile link is based on the email entered during registration and does not prove control of that email address.
 - JWTs are signed with HS256 using `JWT_SECRET` (at least 32 bytes) and validate signature, expiry, issuer, and audience. The configured default access-token lifetime is 1800 seconds (allowed range: 60–3600 seconds).
+- Registration and login set a 30-day opaque refresh token in the HttpOnly `service_scheduler_refresh` cookie, scoped to `/api/v1/auth/tokens`, with `SameSite=Lax` and `Secure` in production. Only a SHA-256 hash is stored in PostgreSQL. `JWT_REFRESH_TOKEN_TTL_SECONDS` configures its lifetime (default 2592000; allowed range: 86400–7776000). Refresh consumes the presented token and issues a replacement. Reuse of a consumed token revokes all active tokens in its family. Refresh sessions are bound to `users.token_version`; revoke-all invalidates them as well as access JWTs.
 - JWT role/membership claims are not treated as authoritative. Each protected request checks the user is active, compares JWT token version with `users.token_version`, and loads current active customer/dealership memberships from PostgreSQL.
 - `POST /api/v1/auth/staff/provision` requires an active owner or manager membership for the requested dealership. Managers may provision only `staff`; only owners may assign `owner` or `manager` roles.
 - The caller who creates a dealership is assigned its initial dealership-scoped owner membership in the same transaction. This is not a global system-administrator role.

@@ -309,6 +309,33 @@ async function run(): Promise<void> {
         .customer !== null,
       "Unverified customers can sign in during the MVP",
     );
+    assert(
+      customerLogin.refreshToken.length >= 40 &&
+        customerLogin.refreshTokenExpiresIn === 2_592_000,
+      "Login issues an opaque 30-day refresh token",
+    );
+    const rotatedCustomerLogin = await authService.refreshAccessToken(
+      customerLogin.refreshToken,
+    );
+    assert(
+      rotatedCustomerLogin.refreshToken !== customerLogin.refreshToken &&
+        (
+          await authService.authenticateBearerToken(
+            rotatedCustomerLogin.accessToken,
+          )
+        ).userId === customerAuth.userId,
+      "Refresh rotates the token and issues a valid access JWT",
+    );
+    await expectError(
+      () => authService.refreshAccessToken(customerLogin.refreshToken),
+      UnauthorizedException,
+      "A consumed refresh token must not be accepted again",
+    );
+    await expectError(
+      () => authService.refreshAccessToken(rotatedCustomerLogin.refreshToken),
+      UnauthorizedException,
+      "Reuse of a rotated token must revoke its refresh-token family",
+    );
 
     const managerEmail = `manager-${randomUUID()}@example.test`;
     const managerProvision = await authService.provisionStaff(ownerAuth, {
@@ -357,6 +384,11 @@ async function run(): Promise<void> {
       () => authService.authenticateBearerToken(ownerLogin.accessToken),
       UnauthorizedException,
       "Token-version revocation must invalidate existing JWTs",
+    );
+    await expectError(
+      () => authService.refreshAccessToken(ownerLogin.refreshToken),
+      UnauthorizedException,
+      "Revoke-all must invalidate outstanding refresh tokens",
     );
     const newOwnerLogin = await authService.staffLogin({
       email: ownerEmail,

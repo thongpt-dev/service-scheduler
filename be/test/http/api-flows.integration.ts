@@ -25,6 +25,12 @@ const seeded = {
 interface HttpResult {
   status: number;
   body: unknown;
+  setCookie?: string;
+}
+
+interface LoginSession {
+  accessToken: string;
+  refreshCookie: string;
 }
 
 interface CleanupAppointment {
@@ -157,6 +163,7 @@ async function request(
     accessToken?: string;
     body?: unknown;
     idempotencyKey?: string;
+    cookie?: string;
   } = {},
 ): Promise<HttpResult> {
   const headers = new Headers();
@@ -169,6 +176,9 @@ async function request(
   if (options.idempotencyKey) {
     headers.set("Idempotency-Key", options.idempotencyKey);
   }
+  if (options.cookie) {
+    headers.set("Cookie", options.cookie);
+  }
   const logHeaders: Record<string, string> = {};
   if (options.accessToken) {
     logHeaders.Authorization = "[REDACTED]";
@@ -178,6 +188,9 @@ async function request(
   }
   if (options.idempotencyKey) {
     logHeaders["Idempotency-Key"] = "[REDACTED]";
+  }
+  if (options.cookie) {
+    logHeaders.Cookie = "[REDACTED]";
   }
   const safePath = sanitizePath(path);
   console.log(
@@ -212,7 +225,11 @@ async function request(
       body: sanitizeForLog(body ?? null),
     }),
   );
-  return { status: response.status, body };
+  return {
+    status: response.status,
+    body,
+    setCookie: response.headers.get("set-cookie") ?? undefined,
+  };
 }
 
 function expectStatus(
@@ -298,12 +315,37 @@ async function login(
   path: string,
   email: string,
   password: string,
-): Promise<string> {
+): Promise<LoginSession> {
   const result = await request(baseUrl, "POST", path, {
     body: { email, password },
   });
   expectStatus(result, 200, `${path} login`);
-  return readToken(result.body, `${path} response`);
+  assert.ok(result.setCookie, `${path} must set a refresh cookie`);
+  assertRecord(result.body, `${path} login response`);
+  assert.equal(
+    Object.hasOwn(result.body, "refreshToken"),
+    false,
+    "Refresh token secret must never appear in the JSON response",
+  );
+  assert.match(
+    result.setCookie,
+    /HttpOnly/i,
+    "Refresh cookie must be HttpOnly",
+  );
+  assert.match(
+    result.setCookie,
+    /SameSite=Lax/i,
+    "Refresh cookie must use SameSite=Lax",
+  );
+  assert.match(
+    result.setCookie,
+    /Path=\/api\/v1\/auth\/tokens/i,
+    "Refresh cookie must be scoped to token routes",
+  );
+  return {
+    accessToken: readToken(result.body, `${path} response`),
+    refreshCookie: result.setCookie.split(";")[0],
+  };
 }
 
 async function run(): Promise<void> {
@@ -356,17 +398,63 @@ async function run(): Promise<void> {
     const ready = await request(baseUrl, "GET", "/api/v1/ready");
     expectStatus(ready, 200, "Readiness endpoint");
 
-    const customerToken = await login(
+    const customerSession = await login(
       baseUrl,
       "/api/v1/auth/customers/login",
       "sample.customer@example.test",
       "LocalCustomerPass123!",
     );
-    const staffToken = await login(
+    const staffSession = await login(
       baseUrl,
       "/api/v1/auth/staff/login",
       "sample.staff@example.test",
       "LocalStaffPass123!",
+    );
+    const customerToken = customerSession.accessToken;
+    const staffToken = staffSession.accessToken;
+
+    logStep("Rotate the HttpOnly refresh cookie and reject replay");
+    const refreshResult = await request(
+      baseUrl,
+      "POST",
+      "/api/v1/auth/tokens/refresh",
+      { cookie: customerSession.refreshCookie },
+    );
+    expectStatus(refreshResult, 200, "Refresh access token");
+    const refreshedCustomerToken = readToken(
+      refreshResult.body,
+      "refresh response",
+    );
+    assert.notEqual(refreshedCustomerToken, customerToken);
+    assert.ok(
+      refreshResult.setCookie,
+      "Refresh endpoint must rotate the cookie",
+    );
+    const rotatedRefreshCookie = refreshResult.setCookie.split(";")[0];
+    const refreshedAuth = await request(
+      baseUrl,
+      "GET",
+      "/api/v1/customers/me",
+      { accessToken: refreshedCustomerToken },
+    );
+    expectStatus(refreshedAuth, 200, "Use refreshed access token");
+    const reusedRefresh = await request(
+      baseUrl,
+      "POST",
+      "/api/v1/auth/tokens/refresh",
+      { cookie: customerSession.refreshCookie },
+    );
+    expectStatus(reusedRefresh, 401, "Reject refresh-token replay");
+    const familyRevokedRefresh = await request(
+      baseUrl,
+      "POST",
+      "/api/v1/auth/tokens/refresh",
+      { cookie: rotatedRefreshCookie },
+    );
+    expectStatus(
+      familyRevokedRefresh,
+      401,
+      "Revoke refresh-token family on replay",
     );
 
     logStep("Verify appointment history rejects unauthenticated callers");
