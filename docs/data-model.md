@@ -194,7 +194,7 @@ All mutable domain tables use UUID primary keys and timezone-aware `created_at` 
 
 | Entity | Purpose and important rules |
 | --- | --- |
-| `users` | Login identity. Email is unique and lowercase; `password_hash` is required. `email_verified_at` is nullable and remains null for new MVP accounts; verification does not gate sign-in or booking. `token_version` is nonnegative and supports invalidating previously issued tokens. |
+| `users` | Login identity. Email is unique and lowercase; `password_hash` is required and stores a salted, parameterized scrypt hash. `email_verified_at` is nullable and remains null for new MVP accounts; verification does not gate sign-in or booking. `token_version` is nonnegative and supports invalidating previously issued tokens. |
 | `customers` | Customer profile and contact information. `user_id` is nullable and unique so staff can create a customer before that customer has an account; a linked customer has at most one user. Customer email is unique and lowercase. |
 | `dealerships` | Dealership identity, address, active state, and IANA timezone. Country code must be uppercase two-letter format. Timezone validity is an API validation responsibility. |
 | `dealership_memberships` | Joins users to dealerships with one membership per user/dealership and role `owner`, `manager`, or `staff`. Memberships can be deactivated without deleting history. |

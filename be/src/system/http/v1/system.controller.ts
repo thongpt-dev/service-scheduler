@@ -5,26 +5,26 @@ import {
   ApiServiceUnavailableResponse,
   ApiTags,
 } from "@nestjs/swagger";
-import { AppService } from "../../app.service";
+import { SystemService } from "../../system.service";
 
 @ApiTags("system v1")
 @Controller({ version: "1" })
-export class V1AppController {
-  constructor(private readonly appService: AppService) {}
+export class SystemControllerV1 {
+  constructor(private readonly systemService: SystemService) {}
 
   @Get("health")
   @ApiOperation({
-    summary: "Check API v1 liveness",
+    summary: "Check API liveness",
     description: "Public process health check; no authentication is required.",
   })
   @ApiOkResponse({ description: "The API process is running." })
   getHealth() {
-    return this.appService.getHealth();
+    return this.systemService.getHealth();
   }
 
   @Get("ready")
   @ApiOperation({
-    summary: "Check API v1 readiness",
+    summary: "Check API readiness",
     description:
       "Public readiness check that verifies database connectivity; no authentication is required.",
   })
@@ -33,6 +33,6 @@ export class V1AppController {
     description: "The database is unavailable.",
   })
   getReadiness() {
-    return this.appService.getReadiness();
+    return this.systemService.getReadiness();
   }
 }

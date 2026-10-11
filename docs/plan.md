@@ -34,20 +34,6 @@ Use foreign keys, checks, unique constraints, and indexes to protect relationshi
 9. Keep appointment history when cancelling or rescheduling. Cancellation releases capacity. Rescheduling changes the booking only if the new interval and resources can be secured atomically; otherwise, leave the original booking unchanged.
 10. MVP statuses are `confirmed`, `cancelled`, `completed`, and `no_show`. Only `confirmed` appointments reserve resources. Limit status changes by actor role.
 
-## Backend modules and API surface
+## Backend capability overview
 
-Use `/api/v1` for all application endpoints. The paths below define the intended capabilities; document request/response DTOs and common error cases in Swagger.
-
-| Module                   | MVP endpoints and responsibilities                                                                                                                                                                       |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auth                     | Customer email/password sign-up and sign-in with JWT; new accounts are tagged unverified and no verification flow is provided. Staff email/password sign-in, owner/manager provisioning, and token revocation. |
-| Customers and vehicles   | `GET/PATCH /customers/me`; `GET /customers/me/vehicles`; staff create/update customers and vehicles; manage authorized vehicle access.                                                                   |
-| Dealerships and services | List/read dealerships and offerings; manager/owner updates for dealership details, services, durations, hours, and closures.                                                                             |
-| Technicians and bays     | Staff listing; manager/owner management of technicians, qualifications, shifts, leave, bays, and service capabilities.                                                                                   |
-| Availability             | `GET /availability?dealershipId=&vehicleId=&serviceTypeId=&date=` returns available start times, duration, and dealership timezone without reserving a slot.                                             |
-| Appointments             | Create self-service and staff-assisted bookings; list customer appointments; read appointment details; search dealership appointments by date/status/resource; cancel and reschedule with authorization. |
-| System                   | Liveness/readiness checks and Swagger at `/api/docs`.                                                                                                                                                    |
-
-For booking creation, the client sends the dealership, vehicle, service, requested start, and idempotency key. Staff-assisted requests also identify the customer. The server calculates the end time and assigns resources; do not accept client-provided technician or bay assignments. Customer email verification and external identity-provider integration are deferred.
-
-Return `400`/`422` for invalid input, `401`/`403` for authentication or authorization failures, `404` where a missing or inaccessible resource should not be disclosed, and `409` for unavailable slots or idempotency conflicts.
+The backend provides native customer/staff authentication, customer and vehicle access, dealership/catalog/resource configuration, availability search, and appointment booking and lifecycle operations. The API is versioned under `/api/v1`; the endpoint inventory, request/authentication contracts, and response/error conventions are maintained separately in [api.md](api.md). Detailed entities, relationships, and persistence constraints are maintained in [data-model.md](data-model.md).

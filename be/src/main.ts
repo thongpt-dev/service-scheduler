@@ -59,6 +59,16 @@ async function bootstrap() {
       "Backend API for service scheduling and resource-constrained bookings.",
     )
     .setVersion("1.0.0")
+    .addBearerAuth(
+      {
+        type: "http",
+        scheme: "bearer",
+        bearerFormat: "JWT",
+        name: "Authorization",
+        in: "header",
+      },
+      "bearer-auth",
+    )
     .build();
   const document = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup("api/docs", app, document);

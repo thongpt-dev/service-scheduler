@@ -1,18 +1,18 @@
 import { ServiceUnavailableException } from "@nestjs/common";
-import { AppService } from "./app.service";
-import { DbService } from "./database/db.service";
+import { DbService } from "../database/db.service";
+import { SystemService } from "./system.service";
 
-describe("AppService", () => {
-  let appService: AppService;
+describe("SystemService", () => {
+  let systemService: SystemService;
   let dbService: jest.Mocked<Pick<DbService, "checkConnection">>;
 
   beforeEach(() => {
     dbService = { checkConnection: jest.fn() };
-    appService = new AppService(dbService as DbService);
+    systemService = new SystemService(dbService);
   });
 
   it("reports process health without querying the database", () => {
-    expect(appService.getHealth()).toMatchObject({
+    expect(systemService.getHealth()).toMatchObject({
       status: "ok",
       service: "service-scheduler-api",
     });
@@ -20,7 +20,7 @@ describe("AppService", () => {
   });
 
   it("reports readiness when the database responds", async () => {
-    await expect(appService.getReadiness()).resolves.toMatchObject({
+    await expect(systemService.getReadiness()).resolves.toMatchObject({
       status: "ready",
       database: "ok",
     });
@@ -32,10 +32,10 @@ describe("AppService", () => {
       new Error("sensitive connection detail"),
     );
 
-    await expect(appService.getReadiness()).rejects.toBeInstanceOf(
+    await expect(systemService.getReadiness()).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     );
-    await expect(appService.getReadiness()).rejects.not.toThrow(
+    await expect(systemService.getReadiness()).rejects.not.toThrow(
       "sensitive connection detail",
     );
   });

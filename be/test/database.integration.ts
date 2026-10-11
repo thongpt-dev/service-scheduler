@@ -12,6 +12,9 @@ const seededIds = {
   bay: "44444444-4444-4444-8444-444444444444",
   customer: "55555555-5555-4555-8555-555555555555",
   vehicle: "66666666-6666-4666-8666-666666666666",
+  customerUser: "99999999-9999-4999-8999-999999999999",
+  owner: "77777777-7777-4777-8777-777777777777",
+  staff: "88888888-8888-4888-8888-888888888888",
 };
 
 function databaseErrorCode(error: unknown): string | undefined {
@@ -51,6 +54,7 @@ async function seed(pool: Pool, databaseUrl: string): Promise<void> {
     env: {
       ...process.env,
       DATABASE_URL: databaseUrl,
+      NODE_ENV: "test",
     },
     stdio: "inherit",
   });
@@ -61,18 +65,28 @@ async function seed(pool: Pool, databaseUrl: string): Promise<void> {
     technician: string;
     bay: string;
     vehicle: string;
+    customerUserLink: string;
+    ownerMembership: string;
+    staffMembership: string;
   }>(
     `SELECT
       (SELECT count(*) FROM dealerships WHERE id = $1) AS dealership,
       (SELECT count(*) FROM dealership_hours WHERE dealership_id = $1) AS hours,
       (SELECT count(*) FROM technicians WHERE id = $2) AS technician,
       (SELECT count(*) FROM service_bays WHERE id = $3) AS bay,
-      (SELECT count(*) FROM vehicles WHERE id = $4) AS vehicle`,
+      (SELECT count(*) FROM vehicles WHERE id = $4) AS vehicle,
+      (SELECT count(*) FROM customers WHERE id = $8 AND user_id = $5) AS "customerUserLink",
+      (SELECT count(*) FROM dealership_memberships WHERE dealership_id = $1 AND user_id = $6 AND role = 'owner' AND is_active) AS "ownerMembership",
+      (SELECT count(*) FROM dealership_memberships WHERE dealership_id = $1 AND user_id = $7 AND role = 'staff' AND is_active) AS "staffMembership"`,
     [
       seededIds.dealership,
       seededIds.technician,
       seededIds.bay,
       seededIds.vehicle,
+      seededIds.customerUser,
+      seededIds.owner,
+      seededIds.staff,
+      seededIds.customer,
     ],
   );
   const counts = result.rows[0];
@@ -81,8 +95,11 @@ async function seed(pool: Pool, databaseUrl: string): Promise<void> {
       counts.hours === "7" &&
       counts.technician === "1" &&
       counts.bay === "1" &&
-      counts.vehicle === "1",
-    "Seed should create one copy of each fixture and seven weekly-hours rows",
+      counts.vehicle === "1" &&
+      counts.customerUserLink === "1" &&
+      counts.ownerMembership === "1" &&
+      counts.staffMembership === "1",
+    "Seed should create repeatable fixtures with linked customer, owner, and staff accounts",
   );
 }
 

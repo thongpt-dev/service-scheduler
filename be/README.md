@@ -19,9 +19,23 @@ npm run db:seed
 npm run start:dev
 ```
 
+Before using auth endpoints, set `JWT_SECRET` in `.env` to at least 32 random bytes (for example, generate one with `openssl rand -base64 48`). Keep it private and use a different value per environment. Issuer and audience default to `service-scheduler-api` and `service-scheduler-clients`; access tokens last 900 seconds by default (configurable from 60 to 3600 seconds). Passwords are stored as salted scrypt hashes; raw passwords and tokens are not logged.
+
 The API listens on `http://localhost:3000`. Swagger UI is at `/api/docs`. URI versioning uses `/api` as the global prefix and defaults unversioned controllers to v1; this MVP currently implements v1 only. The public health and readiness endpoints are `/api/v1/health` and `/api/v1/ready`; readiness returns `503` when PostgreSQL is unavailable.
 
-The PostgreSQL service uses local-development credentials only. Do not reuse them outside local development. The schema migration creates MVP tables and PostgreSQL booking-overlap constraints. The repeatable seed command adds a fictional dealership, service, technician, bay, customer, and vehicle; it does not create login credentials.
+The auth endpoints are `/api/v1/auth/customers/register`, `/api/v1/auth/customers/login`, `/api/v1/auth/staff/login`, `/api/v1/auth/staff/provision`, and `/api/v1/auth/tokens/revoke-all`. Customer and provisioned staff accounts are unverified but can sign in; email verification is not implemented in the MVP. Only dealership owners and managers may provision within their own dealership; managers can provision staff accounts only. Real dealership creation and initial owner assignment will be provided through the dealership/domain APIs.
+
+The PostgreSQL service and demo accounts are for local development only. Never use the demo credentials outside a local development database. Migrations create the schema and booking-overlap constraints. The repeatable `npm run db:seed` command adds a fictional dealership, service, technician, bay, a customer profile linked to a login account, vehicle, and linked owner/staff demo accounts. Rerunning it does not reset existing account passwords. Seeding requires `NODE_ENV=development` or `NODE_ENV=test`; it refuses to run when the mode is unset or any other value. If you already have a local `.env`, add `NODE_ENV=development` before seeding.
+
+Local demo accounts:
+
+| Role | Email | Password |
+| --- | --- | --- |
+| Customer | `sample.customer@example.test` | `LocalCustomerPass123!` |
+| Owner | `sample.owner@example.test` | `LocalOwnerPass123!` |
+| Staff | `sample.staff@example.test` | `LocalStaffPass123!` |
+
+Sign the customer in through `POST /api/v1/auth/customers/login`; sign the owner and staff in through `POST /api/v1/auth/staff/login`. These fixed credentials exist only to make the fictional local seed usable; do not deploy or seed them into a shared or production environment. Creating real dealerships and their staff accounts is planned with the dealership/domain APIs.
 
 ## Checks
 
@@ -37,3 +51,5 @@ PostgreSQL migration/seed checks require a dedicated test database. Create it on
 docker compose exec postgres createdb -U postgres service_scheduler_test
 TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/service_scheduler_test npm run test:db
 ```
+
+`test:db` runs schema/seed/capacity checks and auth service integration checks against the dedicated test database.

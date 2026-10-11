@@ -8,14 +8,14 @@ applyTo: "be/**"
 
 ## Product and architecture source of truth
 
-- Follow [docs/mvp.md](../../docs/mvp.md) for MVP scope, [docs/plan.md](../../docs/plan.md) for roles, data, booking rules, and API behavior, and [docs/system-design.md](../../docs/system-design.md) for architecture and security boundaries.
+- Follow [docs/mvp.md](../../docs/mvp.md) for MVP scope, [docs/plan.md](../../docs/plan.md) for roles and booking rules, [docs/api.md](../../docs/api.md) for endpoint/request/response/auth/error contracts, [docs/data-model.md](../../docs/data-model.md) for entities and persistence constraints, and [docs/system-design.md](../../docs/system-design.md) for architecture and security boundaries.
 - Treat these documents as a single contract. If implementation work exposes a conflict or missing decision, explain it and update the relevant design document as part of the requested work; do not silently invent incompatible behavior.
 - Keep this scope backend-only. The React customer/staff portals, email verification, external identity-provider integration, reminders, production cloud deployment, and advanced telemetry are deferred unless explicitly brought into scope.
 
 ## Backend design and API quality
 
 - Keep HTTP concerns in NestJS controllers and business rules in injectable application/domain services. Use DTO validation at API boundaries and reject unexpected fields.
-- Use NestJS URI versioning with `/api` as the global prefix. The MVP implements routes under `/api/v1` only; keep its HTTP controllers and DTOs under `src/http/v1/` and set controller version `"1"` explicitly. Do not create `src/http/v2/`, v2 controllers/DTOs, or v2 Swagger grouping as future-proof boilerplate. Add v2 only when an approved breaking API-contract change needs to coexist with supported v1 routes; then keep v1 behavior unchanged, add version-specific transport types/controllers, and share application/domain services.
+- Use NestJS URI versioning with `/api` as the global prefix. The MVP implements routes under `/api/v1` only. Organize HTTP adapters by feature module: keep a feature's controller and transport DTOs under `src/<feature>/http/v1/`, set controller version `"1"` explicitly, and register that controller in its feature module. For example, auth uses `src/auth/http/v1/auth.controller.ts` and `src/auth/http/v1/dto/`; appointments use `src/appointments/http/v1/`. Put version-neutral business rules in the feature's application/domain services and share them across transport versions. Do not create a top-level `src/http/v1/` bucket or any v2 controller/DTO folders as boilerplate. Add a feature-local `http/v2/` only when an approved breaking API-contract change needs to coexist with supported v1 routes; keep v1 behavior unchanged.
 - Keep Swagger UI at `/api/docs`; document the currently implemented version. If v2 is introduced, make the specification distinguish both versions. For every added or changed endpoint, update Swagger tags, `@ApiOperation` descriptions, applicable request examples, authentication requirements, and relevant success/error responses.
 - Use consistent errors: `400`/`422` for invalid input, `401`/`403` for authentication or authorization failures, and `409` for booking conflicts or idempotency-key reuse with a different request. Avoid leaking whether inaccessible customer or vehicle records exist.
 - Enforce customer ownership and dealership membership/role scope in the API on every protected operation. Never trust a client-supplied entity ID or a frontend guard as authorization.
@@ -37,7 +37,7 @@ applyTo: "be/**"
 - On confirmation, revalidate and allocate both resources in one short database transaction. Only `confirmed` appointments reserve technician and bay capacity; cancellation, completion, and no-show release it. Keep application checks and PostgreSQL exclusion constraints consistent.
 - Require idempotency keys for booking creation. Scope records by authenticated actor and operation; store the normalized request hash and resulting appointment for 24 hours. Replay a matching request and return `409` when a key is reused with a different request.
 - Store appointment instants as timezone-aware UTC timestamps and interpret recurring schedules with the dealership's IANA timezone. Use half-open `[start, end)` intervals so adjacent bookings do not overlap.
-- Preserve appointment records and booked service snapshots. Prefer deactivation over deleting records referenced by appointment history. Keep Drizzle schema, SQL migrations, and the data model in `docs/plan.md` aligned; update documentation in the same change when schema or validation rules change.
+- Preserve appointment records and booked service snapshots. Prefer deactivation over deleting records referenced by appointment history. Keep Drizzle schema, SQL migrations, and the detailed data model in [docs/data-model.md](../../docs/data-model.md) aligned; update that document in the same change when schema or validation rules change. Keep `docs/plan.md` focused on product roles, booking rules, and API behavior.
 
 ## Tests and required validation
 

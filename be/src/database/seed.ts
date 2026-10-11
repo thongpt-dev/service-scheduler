@@ -1,6 +1,8 @@
 import "dotenv/config";
+import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
+import { hashPassword } from "../auth/security.util";
 import * as schema from "./schema";
 
 const seedIds = {
@@ -10,9 +12,39 @@ const seedIds = {
   bay: "44444444-4444-4444-8444-444444444444",
   customer: "55555555-5555-4555-8555-555555555555",
   vehicle: "66666666-6666-4666-8666-666666666666",
+  customerUser: "99999999-9999-4999-8999-999999999999",
+  owner: "77777777-7777-4777-8777-777777777777",
+  staff: "88888888-8888-4888-8888-888888888888",
 };
 
+const demoAccounts = [
+  {
+    id: seedIds.customerUser,
+    email: "sample.customer@example.test",
+    password: "LocalCustomerPass123!",
+    dealershipRole: null,
+  },
+  {
+    id: seedIds.owner,
+    email: "sample.owner@example.test",
+    password: "LocalOwnerPass123!",
+    dealershipRole: "owner" as const,
+  },
+  {
+    id: seedIds.staff,
+    email: "sample.staff@example.test",
+    password: "LocalStaffPass123!",
+    dealershipRole: "staff" as const,
+  },
+];
+
 async function seedDatabase(): Promise<void> {
+  if (!new Set(["development", "test"]).has(process.env.NODE_ENV ?? "")) {
+    throw new Error(
+      "Development seed data requires NODE_ENV=development or NODE_ENV=test",
+    );
+  }
+
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
     throw new Error("DATABASE_URL is required to seed the database");
@@ -128,15 +160,21 @@ async function seedDatabase(): Promise<void> {
       })
       .onConflictDoNothing();
 
+    await seedDemoAccounts(db);
+
     await db
       .insert(schema.customers)
       .values({
         id: seedIds.customer,
+        userId: seedIds.customerUser,
         email: "sample.customer@example.test",
         firstName: "Sample",
         lastName: "Customer",
       })
-      .onConflictDoNothing();
+      .onConflictDoUpdate({
+        target: schema.customers.email,
+        set: { userId: seedIds.customerUser },
+      });
 
     await db
       .insert(schema.vehicles)
@@ -152,6 +190,108 @@ async function seedDatabase(): Promise<void> {
   } finally {
     await pool.end();
   }
+}
+
+async function seedDemoAccounts(
+  db: ReturnType<typeof drizzle<typeof schema>>,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [dealership] = await tx
+      .select({ id: schema.dealerships.id })
+      .from(schema.dealerships)
+      .where(
+        and(
+          eq(schema.dealerships.id, seedIds.dealership),
+          eq(schema.dealerships.isActive, true),
+        ),
+      )
+      .limit(1);
+    if (!dealership) {
+      throw new Error("Seed dealership does not exist");
+    }
+
+    for (const account of demoAccounts) {
+      const [existingUser] = await tx
+        .select({ id: schema.users.id, email: schema.users.email })
+        .from(schema.users)
+        .where(eq(schema.users.id, account.id))
+        .limit(1);
+
+      if (existingUser && existingUser.email !== account.email) {
+        throw new Error(`Seed account ID is already in use: ${account.id}`);
+      }
+
+      if (!existingUser) {
+        const [emailOwner] = await tx
+          .select({ id: schema.users.id })
+          .from(schema.users)
+          .where(eq(schema.users.email, account.email))
+          .limit(1);
+        if (emailOwner) {
+          throw new Error(
+            `Seed account email is already in use: ${account.email}`,
+          );
+        }
+
+        await tx
+          .insert(schema.users)
+          .values({
+            id: account.id,
+            email: account.email,
+            passwordHash: await hashPassword(account.password),
+          })
+          .onConflictDoNothing();
+      }
+
+      const [seededUser] = await tx
+        .select({ id: schema.users.id, email: schema.users.email })
+        .from(schema.users)
+        .where(eq(schema.users.id, account.id))
+        .limit(1);
+      if (!seededUser || seededUser.email !== account.email) {
+        throw new Error(`Could not create seed account: ${account.email}`);
+      }
+
+      if (!account.dealershipRole) {
+        continue;
+      }
+
+      const [membership] = await tx
+        .select({
+          id: schema.dealershipMemberships.id,
+          role: schema.dealershipMemberships.role,
+          isActive: schema.dealershipMemberships.isActive,
+        })
+        .from(schema.dealershipMemberships)
+        .where(
+          and(
+            eq(schema.dealershipMemberships.dealershipId, seedIds.dealership),
+            eq(schema.dealershipMemberships.userId, account.id),
+          ),
+        )
+        .limit(1);
+
+      if (!membership) {
+        await tx.insert(schema.dealershipMemberships).values({
+          dealershipId: seedIds.dealership,
+          userId: account.id,
+          role: account.dealershipRole,
+        });
+      } else if (
+        membership.role !== account.dealershipRole ||
+        !membership.isActive
+      ) {
+        await tx
+          .update(schema.dealershipMemberships)
+          .set({
+            role: account.dealershipRole,
+            isActive: true,
+            updatedAt: new Date(),
+          })
+          .where(eq(schema.dealershipMemberships.id, membership.id));
+      }
+    }
+  });
 }
 
 void seedDatabase().catch(() => {

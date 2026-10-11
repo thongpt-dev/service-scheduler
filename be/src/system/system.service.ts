@@ -1,9 +1,16 @@
-import { Injectable, ServiceUnavailableException } from "@nestjs/common";
-import { DbService } from "./database/db.service";
+import {
+  Inject,
+  Injectable,
+  ServiceUnavailableException,
+} from "@nestjs/common";
+import { DbService } from "../database/db.service";
 
 @Injectable()
-export class AppService {
-  constructor(private readonly dbService: DbService) {}
+export class SystemService {
+  constructor(
+    @Inject(DbService)
+    private readonly dbService: Pick<DbService, "checkConnection">,
+  ) {}
 
   getHealth() {
     return {
