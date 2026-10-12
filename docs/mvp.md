@@ -18,9 +18,9 @@ The overall product MVP replaces manual service booking with a server-authoritat
 
 - Reliable availability: Calculate availability from dealership hours and closures, service duration, technician qualifications and shifts, leave, bay capabilities, and existing confirmed appointments. Recheck everything when confirming; a displayed slot is not a reservation. MVP defaults: book 2 hours to 60 days ahead, offer starts in 15-minute increments, use the active dealership-service duration, and apply no preparation or cleanup buffer.
 
-- Appointment management: View upcoming and past appointments, inspect details, cancel, and reschedule Preserve history and only apply a reschedule if the new slot can be secured.
+- Appointment management: View upcoming and past appointments, inspect details, cancel, and reschedule. Preserve history and only apply a reschedule if the new slot can be secured.
 
-- Staff operations: Search and filter a dealership’s schedule; inspect appointments; book for customers configure hours, closures, services, technicians, shifts, leave, bays, and service compatibility with appropriate manager permissions.
+- Staff operations: Search and filter a dealership’s schedule, inspect appointments, and book for customers. The current API filters schedules by time range, status, and customer; technician and bay filters are not implemented. Managers configure hours, closures, services, technicians, shifts, leave, bays, and service compatibility.
 
 - Trust and usability: Enforce customer and dealership access rules, show clear unavailable/error states, display times in the dealership’s timezone, and support responsive, keyboard-accessible forms.
 
@@ -43,7 +43,7 @@ The overall product MVP replaces manual service booking with a server-authoritat
 - Email verification and external identity-provider integration; accounts remain tagged unverified in the MVP.
 - The other later-release features listed above, plus production cloud deployment and advanced telemetry.
 
-## Good candicates for later
+## Good candidates for later
 
 - Email verification and verified-email authorization rules
 - External identity-provider integration
