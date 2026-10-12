@@ -1,0 +1,52 @@
+@import "@fontsource/dm-sans/400.css";
+@import "@fontsource/dm-sans/500.css";
+@import "@fontsource/dm-sans/600.css";
+@import "@fontsource/dm-sans/700.css";
+@import "@fontsource/dm-serif-display/400.css";
+
+:root {
+  font-family: "DM Sans", "Avenir Next", sans-serif;
+  color: #263633;
+  background: #e6e9e3;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --ink: #263633;
+  --muted: #7c8984;
+  --line: #e1e6df;
+  --paper: #fbfcf9;
+  --surface: #ffffff;
+  --pine: #25544d;
+  --pine-deep: #1c423c;
+  --coral: #e86e4e;
+  --marigold: #e4b84d;
+  --mint: #e4eee8;
+  --danger: #b94438;
+  --shadow: 0 12px 30px rgba(35, 55, 48, 0.08);
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+
+html { min-width: 320px; background: #e6e9e3; }
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background-color: #e6e9e3;
+  background-image: repeating-linear-gradient(135deg, rgba(37, 84, 77, 0.025) 0 1px, transparent 1px 13px);
+}
+
+button, input, select, textarea { font: inherit; }
+button { color: inherit; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 3px solid rgba(232, 110, 78, 0.45);
+  outline-offset: 2px;
+}
+
+a { color: inherit; }
+
+#root { min-height: 100svh; }
+
+::selection { color: #fff; background: var(--pine); }
